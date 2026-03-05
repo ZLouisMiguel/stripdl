@@ -210,51 +210,22 @@ async function buildChapterRows(series) {
 // ──────────────────────────────────────────────────────────────────
 //  Reader
 // ──────────────────────────────────────────────────────────────────
-// ──────────────────────────────────────────────────────────────────
-//  Reader
-// ──────────────────────────────────────────────────────────────────
-
-function chapterIndex(series, chapter) {
-  return series.chapters.findIndex((c) => c.number === chapter.number);
-}
-
-function updateNavButtons() {
+// Helper to enable/disable chapter navigation buttons
+function updateChapterNavButtons() {
   const series = state.currentSeries;
   const chapter = state.currentChapter;
   if (!series || !chapter) return;
-  const idx = chapterIndex(series, chapter);
-  const hasPrev = idx > 0;
-  const hasNext = idx < series.chapters.length - 1;
 
-  const btnPrev = document.getElementById("btn-prev-chapter");
-  const btnNext = document.getElementById("btn-next-chapter");
-  if (btnPrev) btnPrev.disabled = !hasPrev;
-  if (btnNext) btnNext.disabled = !hasNext;
+  const idx = series.chapters.findIndex((c) => c.number === chapter.number);
+  const prevBtn = document.getElementById("btn-prev-chapter");
+  const nextBtn = document.getElementById("btn-next-chapter");
+  const endPrevBtn = document.getElementById("btn-end-prev-chapter");
+  const endNextBtn = document.getElementById("btn-end-next-chapter");
 
-  const btnEndPrev = document.getElementById("btn-end-prev-chapter");
-  const btnEndNext = document.getElementById("btn-end-next-chapter");
-  if (btnEndPrev) btnEndPrev.disabled = !hasPrev;
-  if (btnEndNext) btnEndNext.disabled = !hasNext;
-
-  const endTitle = document.getElementById("chapter-end-title");
-  if (endTitle) {
-    if (hasNext) {
-      const next = series.chapters[idx + 1];
-      endTitle.textContent = `Ch ${next.number}  —  ${next.title}`;
-    } else {
-      endTitle.textContent = "You've reached the last downloaded chapter.";
-    }
-  }
-}
-
-function navigateChapter(direction) {
-  const series = state.currentSeries;
-  const chapter = state.currentChapter;
-  if (!series || !chapter) return;
-  const idx = chapterIndex(series, chapter);
-  const targetIdx = idx + direction;
-  if (targetIdx < 0 || targetIdx >= series.chapters.length) return;
-  openChapter(series, series.chapters[targetIdx]);
+  if (prevBtn) prevBtn.disabled = idx <= 0;
+  if (nextBtn) nextBtn.disabled = idx >= series.chapters.length - 1;
+  if (endPrevBtn) endPrevBtn.disabled = idx <= 0;
+  if (endNextBtn) endNextBtn.disabled = idx >= series.chapters.length - 1;
 }
 
 async function openChapter(series, chapter) {
@@ -262,22 +233,19 @@ async function openChapter(series, chapter) {
   state.currentChapter = chapter;
   state.currentPageIndex = 0;
 
+  const toolbar = document.getElementById("reader-toolbar");
   const pagesEl = document.getElementById("reader-pages");
   const titleEl = document.getElementById("reader-title");
   const pageInfo = document.getElementById("reader-page-info");
-  const endOverlay = document.getElementById("chapter-end-overlay");
 
-  titleEl.textContent = `${series.title}  ·  Ch ${chapter.number}  —  ${chapter.title}`;
+  titleEl.textContent = `${series.title}  ·  Chapter ${chapter.number}`;
   pagesEl.innerHTML = "";
   pageInfo.textContent = "";
-  if (endOverlay) endOverlay.style.display = "none";
-
-  // Scroll to top on chapter switch
-  const existingContainer = document.getElementById("reader-container");
-  if (existingContainer) existingContainer.scrollTop = 0;
 
   showView("reader");
-  updateNavButtons();
+
+  // Update button states
+  updateChapterNavButtons();
 
   // Load pages
   let pages = [];
@@ -352,19 +320,14 @@ async function openChapter(series, chapter) {
     }, 200);
   }
 
-  // Clone container to wipe stale scroll listeners from previous chapter
-  const oldContainer = document.getElementById("reader-container");
-  const freshContainer = oldContainer.cloneNode(true);
-  oldContainer.parentNode.replaceChild(freshContainer, oldContainer);
+  // Save progress on scroll
   const container = document.getElementById("reader-container");
-
   let saveTimer = null;
-  let endShown = false;
-
   container.addEventListener(
     "scroll",
     () => {
-      const imgs = container.querySelectorAll("#reader-pages img");
+      // Find which image is most visible
+      const imgs = pagesEl.querySelectorAll("img");
       let visibleIdx = 0;
       imgs.forEach((img, i) => {
         const rect = img.getBoundingClientRect();
@@ -376,46 +339,12 @@ async function openChapter(series, chapter) {
       saveTimer = setTimeout(() => {
         window.strip.progress.set(progressKey, visibleIdx);
       }, 500);
-
-      // Show end-of-chapter card when within 200px of bottom
-      const dist =
-        container.scrollHeight - container.scrollTop - container.clientHeight;
-      const overlay = document.getElementById("chapter-end-overlay");
-      if (overlay && dist < 200 && !endShown) {
-        endShown = true;
-        overlay.style.display = "flex";
-        updateNavButtons();
-      }
     },
     { passive: true },
   );
-
-  // Keyboard shortcuts
-  if (state._keyHandler)
-    document.removeEventListener("keydown", state._keyHandler);
-  state._keyHandler = (e) => {
-    const c = document.getElementById("reader-container");
-    if (!c) return;
-    if (e.key === "ArrowDown" || e.key === "ArrowRight") {
-      c.scrollBy({ top: window.innerHeight * 0.85, behavior: "smooth" });
-    } else if (e.key === "ArrowUp" || e.key === "ArrowLeft") {
-      c.scrollBy({ top: -window.innerHeight * 0.85, behavior: "smooth" });
-    } else if (e.key === "Escape") {
-      goBackFromReader();
-    } else if (e.key === "]" || e.key === "n") {
-      navigateChapter(1);
-    } else if (e.key === "[" || e.key === "p") {
-      navigateChapter(-1);
-    }
-  };
-  document.addEventListener("keydown", state._keyHandler);
 }
 
 function goBackFromReader() {
-  if (state._keyHandler) {
-    document.removeEventListener("keydown", state._keyHandler);
-    state._keyHandler = null;
-  }
   if (state.currentSeries) {
     showView("series");
     // Re-highlight series nav as "library"
@@ -427,6 +356,7 @@ function goBackFromReader() {
     showView("library");
   }
 }
+
 // ──────────────────────────────────────────────────────────────────
 //  Download
 // ──────────────────────────────────────────────────────────────────
@@ -606,6 +536,47 @@ async function init() {
     .getElementById("btn-back-series")
     ?.addEventListener("click", goBackFromReader);
 
+  // Chapter navigation buttons
+  document.getElementById("btn-prev-chapter")?.addEventListener("click", () => {
+    const idx = state.currentSeries?.chapters.findIndex(
+      (c) => c.number === state.currentChapter?.number,
+    );
+    if (idx > 0)
+      openChapter(state.currentSeries, state.currentSeries.chapters[idx - 1]);
+  });
+
+  document.getElementById("btn-next-chapter")?.addEventListener("click", () => {
+    const idx = state.currentSeries?.chapters.findIndex(
+      (c) => c.number === state.currentChapter?.number,
+    );
+    if (idx !== -1 && idx < state.currentSeries.chapters.length - 1)
+      openChapter(state.currentSeries, state.currentSeries.chapters[idx + 1]);
+  });
+
+  document
+    .getElementById("btn-end-prev-chapter")
+    ?.addEventListener("click", () => {
+      const idx = state.currentSeries?.chapters.findIndex(
+        (c) => c.number === state.currentChapter?.number,
+      );
+      if (idx > 0)
+        openChapter(state.currentSeries, state.currentSeries.chapters[idx - 1]);
+    });
+
+  document
+    .getElementById("btn-end-next-chapter")
+    ?.addEventListener("click", () => {
+      const idx = state.currentSeries?.chapters.findIndex(
+        (c) => c.number === state.currentChapter?.number,
+      );
+      if (idx !== -1 && idx < state.currentSeries.chapters.length - 1)
+        openChapter(state.currentSeries, state.currentSeries.chapters[idx + 1]);
+    });
+
+  document
+    .getElementById("btn-end-back")
+    ?.addEventListener("click", goBackFromReader);
+
   // Download
   document
     .getElementById("btn-start-download")
@@ -650,6 +621,64 @@ async function init() {
       await window.strip.theme.set(theme);
       await window.strip.config.set({ theme });
     });
+
+  // Global keyboard shortcuts (reader only)
+  document.addEventListener("keydown", (e) => {
+    if (state.currentView !== "reader") return;
+
+    // Ignore if user is typing in an input (none in reader, but safe)
+    if (e.target.tagName === "INPUT" || e.target.tagName === "TEXTAREA") return;
+
+    const key = e.key.toLowerCase();
+
+    // Escape → back to series list
+    if (key === "escape") {
+      e.preventDefault();
+      goBackFromReader();
+      return;
+    }
+
+    // n / p → next / previous chapter
+    if (key === "n") {
+      e.preventDefault();
+      const idx = state.currentSeries?.chapters.findIndex(
+        (c) => c.number === state.currentChapter?.number,
+      );
+      if (idx !== -1 && idx < state.currentSeries.chapters.length - 1) {
+        openChapter(state.currentSeries, state.currentSeries.chapters[idx + 1]);
+      }
+      return;
+    }
+
+    if (key === "p") {
+      e.preventDefault();
+      const idx = state.currentSeries?.chapters.findIndex(
+        (c) => c.number === state.currentChapter?.number,
+      );
+      if (idx > 0) {
+        openChapter(state.currentSeries, state.currentSeries.chapters[idx - 1]);
+      }
+      return;
+    }
+
+    // Arrow keys for scrolling
+    const container = document.getElementById("reader-container");
+    if (!container) return;
+
+    if (key === "arrowdown" || key === "arrowright") {
+      e.preventDefault();
+      container.scrollBy({
+        top: window.innerHeight * 0.85,
+        behavior: "smooth",
+      });
+    } else if (key === "arrowup" || key === "arrowleft") {
+      e.preventDefault();
+      container.scrollBy({
+        top: -window.innerHeight * 0.85,
+        behavior: "smooth",
+      });
+    }
+  });
 
   // Initial load
   await loadLibrary();
