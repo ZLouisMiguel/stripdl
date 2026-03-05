@@ -1,0 +1,30 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg
+*.egg-info/
+dist/
+build/
+.eggs/
+.pytest_cache/
+.mypy_cache/
+.venv/
+venv/
+env/
+
+# Electron
+electron-app/node_modules/
+electron-app/dist/
+
+# Strip data (downloads)
+strip-data/
+*.jpg
+
+# Misc
+.DS_Store
+Thumbs.db
+*.log
+.env
