@@ -182,27 +182,29 @@ async function buildChapterRows(series) {
   if (!series.chapters?.length)
     return "<p class='muted' style='padding:20px'>No chapters downloaded.</p>";
 
-  const rows = [];
-  for (let i = 0; i < series.chapters.length; i++) {
-    const ch = series.chapters[i];
-    const progressKey = `${series.title}/${ch.number}`;
-    let savedPage = 0;
-    try {
-      savedPage = await window.strip.progress.get(progressKey);
-    } catch (_) {}
-    const hasProgress = savedPage > 0;
-    rows.push(`
-      <div class="chapter-row ${hasProgress ? "has-progress" : ""}" data-chapter-index="${i}">
-        <span class="chapter-num">${ch.number}</span>
-        <span class="chapter-title">${esc(ch.title)}</span>
-        <div style="display:flex;align-items:center;gap:10px">
-          <span class="chapter-date">${esc(ch.date ?? "")}</span>
-          <div class="chapter-progress-dot" title="In progress"></div>
+  // Fetch ALL progress keys in parallel — not one await per chapter.
+  // A 200-chapter series would hang for several seconds doing it sequentially.
+  const progressResults = await Promise.all(
+    series.chapters.map((ch) =>
+      window.strip.progress.get(`${series.title}/${ch.number}`).catch(() => 0),
+    ),
+  );
+
+  return series.chapters
+    .map((ch, i) => {
+      const hasProgress = progressResults[i] > 0;
+      return `
+        <div class="chapter-row ${hasProgress ? "has-progress" : ""}" data-chapter-index="${i}">
+          <span class="chapter-num">${ch.number}</span>
+          <span class="chapter-title">${esc(ch.title)}</span>
+          <div style="display:flex;align-items:center;gap:10px">
+            <span class="chapter-date">${esc(ch.date ?? "")}</span>
+            <div class="chapter-progress-dot" title="In progress"></div>
+          </div>
         </div>
-      </div>
-    `);
-  }
-  return rows.join("");
+      `;
+    })
+    .join("");
 }
 
 // ──────────────────────────────────────────────────────────────────
@@ -247,7 +249,9 @@ async function openChapter(series, chapter) {
     startPage = await window.strip.progress.get(progressKey);
   } catch (_) {}
 
-  // Build image elements with lazy loading shimmer
+  // Build image elements
+  // Local file:// images load near-instantly — no need for lazy loading.
+  // We just set src directly and let the browser handle it.
   pages.forEach((filePath, i) => {
     const wrapper = document.createElement("div");
     wrapper.style.width = "100%";
@@ -261,9 +265,8 @@ async function openChapter(series, chapter) {
     img.className = "reader-page-img";
     // Windows paths use backslashes — file:// URLs require forward slashes
     const fileUrl = "file:///" + filePath.replace(/\\/g, "/");
-    img.dataset.src = fileUrl;
-    img.dataset.index = i;
     img.alt = `Page ${i + 1}`;
+    img.style.display = "none";
 
     img.onload = () => {
       shimmer.remove();
@@ -277,32 +280,12 @@ async function openChapter(series, chapter) {
       wrapper.appendChild(err);
     };
 
-    img.style.display = "none";
+    // Set src immediately — local files are fast, no lazy-loading needed
+    img.src = fileUrl;
+
     wrapper.appendChild(img);
     pagesEl.appendChild(wrapper);
   });
-
-  // Intersection Observer — use reader-container as root so it tracks
-  // scroll within the panel, not the full viewport
-  const readerContainer = document.getElementById("reader-container");
-  const observer = new IntersectionObserver(
-    (entries) => {
-      entries.forEach((entry) => {
-        if (entry.isIntersecting) {
-          const img = entry.target;
-          if (img.dataset.src && !img.src.startsWith("file")) {
-            img.src = img.dataset.src;
-          }
-          observer.unobserve(img);
-        }
-      });
-    },
-    { root: readerContainer, rootMargin: "400px" },
-  );
-
-  pagesEl
-    .querySelectorAll("img[data-src]")
-    .forEach((img) => observer.observe(img));
 
   pageInfo.textContent = `${pages.length} pages`;
 
