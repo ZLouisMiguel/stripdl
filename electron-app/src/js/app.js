@@ -22,8 +22,12 @@ const state = {
 //  View router
 // ──────────────────────────────────────────────────────────────────
 function showView(id) {
-  document.querySelectorAll(".view").forEach((v) => v.classList.remove("active"));
-  document.querySelectorAll(".nav-link").forEach((a) => a.classList.remove("active"));
+  document
+    .querySelectorAll(".view")
+    .forEach((v) => v.classList.remove("active"));
+  document
+    .querySelectorAll(".nav-link")
+    .forEach((a) => a.classList.remove("active"));
 
   const view = document.getElementById(`view-${id}`);
   if (view) view.classList.add("active");
@@ -41,7 +45,8 @@ async function loadLibrary() {
   const grid = document.getElementById("library-grid");
   const empty = document.getElementById("library-empty");
 
-  grid.innerHTML = '<div class="empty-state"><div class="empty-icon">◈</div><p style="color:var(--text-muted)">Loading…</p></div>';
+  grid.innerHTML =
+    '<div class="empty-state"><div class="empty-icon">◈</div><p style="color:var(--text-muted)">Loading…</p></div>';
 
   try {
     state.library = await window.strip.library.scan();
@@ -81,7 +86,7 @@ function buildSeriesCard(series) {
   card.dataset.directory = series.directory;
 
   const coverHtml = series.coverPath
-    ? `<img class="series-cover" src="file://${series.coverPath}" alt="${esc(series.title)}" loading="lazy" />`
+    ? `<img class="series-cover" src="file:///${series.coverPath.replace(/\\/g, "/")}" alt="${esc(series.title)}" loading="lazy" />`
     : `<div class="series-cover-placeholder">◈</div>`;
 
   card.innerHTML = `
@@ -106,7 +111,7 @@ async function openSeries(series) {
   const container = document.getElementById("series-detail");
 
   const coverHtml = series.coverPath
-    ? `<img class="detail-cover" src="file://${series.coverPath}" alt="${esc(series.title)}" />`
+    ? `<img class="detail-cover" src="file:///${series.coverPath.replace(/\\/g, "/")}" alt="${esc(series.title)}" />`
     : `<div class="detail-cover-placeholder">◈</div>`;
 
   const tags = [series.genre, series.status].filter(Boolean);
@@ -157,26 +162,34 @@ async function openSeries(series) {
   });
 
   // Download more button
-  container.querySelector("#btn-series-download")?.addEventListener("click", () => {
-    document.getElementById("download-url").value = series.metadata?.url ?? "";
-    showView("download");
-    // Switch nav highlight
-    document.querySelectorAll(".nav-link").forEach(a => a.classList.remove("active"));
-    document.querySelector('[data-view="download"]')?.classList.add("active");
-  });
+  container
+    .querySelector("#btn-series-download")
+    ?.addEventListener("click", () => {
+      document.getElementById("download-url").value =
+        series.metadata?.url ?? "";
+      showView("download");
+      // Switch nav highlight
+      document
+        .querySelectorAll(".nav-link")
+        .forEach((a) => a.classList.remove("active"));
+      document.querySelector('[data-view="download"]')?.classList.add("active");
+    });
 
   showView("series");
 }
 
 async function buildChapterRows(series) {
-  if (!series.chapters?.length) return "<p class='muted' style='padding:20px'>No chapters downloaded.</p>";
+  if (!series.chapters?.length)
+    return "<p class='muted' style='padding:20px'>No chapters downloaded.</p>";
 
   const rows = [];
   for (let i = 0; i < series.chapters.length; i++) {
     const ch = series.chapters[i];
     const progressKey = `${series.title}/${ch.number}`;
     let savedPage = 0;
-    try { savedPage = await window.strip.progress.get(progressKey); } catch (_) {}
+    try {
+      savedPage = await window.strip.progress.get(progressKey);
+    } catch (_) {}
     const hasProgress = savedPage > 0;
     rows.push(`
       <div class="chapter-row ${hasProgress ? "has-progress" : ""}" data-chapter-index="${i}">
@@ -230,7 +243,9 @@ async function openChapter(series, chapter) {
   // Restore progress
   const progressKey = `${series.title}/${chapter.number}`;
   let startPage = 0;
-  try { startPage = await window.strip.progress.get(progressKey); } catch (_) {}
+  try {
+    startPage = await window.strip.progress.get(progressKey);
+  } catch (_) {}
 
   // Build image elements with lazy loading shimmer
   pages.forEach((filePath, i) => {
@@ -244,7 +259,9 @@ async function openChapter(series, chapter) {
 
     const img = document.createElement("img");
     img.className = "reader-page-img";
-    img.dataset.src = `file://${filePath}`;
+    // Windows paths use backslashes — file:// URLs require forward slashes
+    const fileUrl = "file:///" + filePath.replace(/\\/g, "/");
+    img.dataset.src = fileUrl;
     img.dataset.index = i;
     img.alt = `Page ${i + 1}`;
 
@@ -265,23 +282,27 @@ async function openChapter(series, chapter) {
     pagesEl.appendChild(wrapper);
   });
 
-  // Intersection Observer for lazy loading
+  // Intersection Observer — use reader-container as root so it tracks
+  // scroll within the panel, not the full viewport
+  const readerContainer = document.getElementById("reader-container");
   const observer = new IntersectionObserver(
     (entries) => {
       entries.forEach((entry) => {
         if (entry.isIntersecting) {
           const img = entry.target;
-          if (img.dataset.src && !img.src) {
+          if (img.dataset.src && !img.src.startsWith("file")) {
             img.src = img.dataset.src;
           }
           observer.unobserve(img);
         }
       });
     },
-    { rootMargin: "200px" }
+    { root: readerContainer, rootMargin: "400px" },
   );
 
-  pagesEl.querySelectorAll("img[data-src]").forEach((img) => observer.observe(img));
+  pagesEl
+    .querySelectorAll("img[data-src]")
+    .forEach((img) => observer.observe(img));
 
   pageInfo.textContent = `${pages.length} pages`;
 
@@ -298,28 +319,39 @@ async function openChapter(series, chapter) {
   // Save progress on scroll
   const container = document.getElementById("reader-container");
   let saveTimer = null;
-  container.addEventListener("scroll", () => {
-    // Find which image is most visible
-    const imgs = pagesEl.querySelectorAll("img");
-    let visibleIdx = 0;
-    imgs.forEach((img, i) => {
-      const rect = img.getBoundingClientRect();
-      if (rect.top < window.innerHeight / 2 && rect.bottom > 0) visibleIdx = i;
-    });
-    pageInfo.textContent = `${visibleIdx + 1} / ${pages.length}`;
-    clearTimeout(saveTimer);
-    saveTimer = setTimeout(() => {
-      window.strip.progress.set(progressKey, visibleIdx);
-    }, 500);
-  }, { passive: true });
+  container.addEventListener(
+    "scroll",
+    () => {
+      // Find which image is most visible
+      const imgs = pagesEl.querySelectorAll("img");
+      let visibleIdx = 0;
+      imgs.forEach((img, i) => {
+        const rect = img.getBoundingClientRect();
+        if (rect.top < window.innerHeight / 2 && rect.bottom > 0)
+          visibleIdx = i;
+      });
+      pageInfo.textContent = `${visibleIdx + 1} / ${pages.length}`;
+      clearTimeout(saveTimer);
+      saveTimer = setTimeout(() => {
+        window.strip.progress.set(progressKey, visibleIdx);
+      }, 500);
+    },
+    { passive: true },
+  );
 
   // Keyboard navigation
   const keyHandler = (e) => {
     const container = document.getElementById("reader-container");
     if (e.key === "ArrowDown" || e.key === "ArrowRight") {
-      container.scrollBy({ top: window.innerHeight * 0.85, behavior: "smooth" });
+      container.scrollBy({
+        top: window.innerHeight * 0.85,
+        behavior: "smooth",
+      });
     } else if (e.key === "ArrowUp" || e.key === "ArrowLeft") {
-      container.scrollBy({ top: -window.innerHeight * 0.85, behavior: "smooth" });
+      container.scrollBy({
+        top: -window.innerHeight * 0.85,
+        behavior: "smooth",
+      });
     } else if (e.key === "Escape") {
       document.removeEventListener("keydown", keyHandler);
       goBackFromReader();
@@ -332,7 +364,9 @@ function goBackFromReader() {
   if (state.currentSeries) {
     showView("series");
     // Re-highlight series nav as "library"
-    document.querySelectorAll(".nav-link").forEach(a => a.classList.remove("active"));
+    document
+      .querySelectorAll(".nav-link")
+      .forEach((a) => a.classList.remove("active"));
     document.querySelector('[data-view="library"]')?.classList.add("active");
   } else {
     showView("library");
@@ -398,7 +432,10 @@ async function startDownload() {
         break;
 
       case "chapter_done":
-        addLog(logEl, `✓ Chapter ${data.chapter} downloaded (${data.pages_saved} pages)`);
+        addLog(
+          logEl,
+          `✓ Chapter ${data.chapter} downloaded (${data.pages_saved} pages)`,
+        );
         break;
 
       case "skipped":
@@ -467,7 +504,9 @@ function applyTheme(theme) {
     body.setAttribute("data-theme", "light");
   } else {
     // system
-    const prefersDark = window.matchMedia("(prefers-color-scheme: dark)").matches;
+    const prefersDark = window.matchMedia(
+      "(prefers-color-scheme: dark)",
+    ).matches;
     body.setAttribute("data-theme", prefersDark ? "dark" : "light");
   }
 }
@@ -494,26 +533,38 @@ async function init() {
   });
 
   // Library actions
-  document.getElementById("btn-refresh-library")?.addEventListener("click", loadLibrary);
-  document.getElementById("btn-add-download")?.addEventListener("click", () => showView("download"));
+  document
+    .getElementById("btn-refresh-library")
+    ?.addEventListener("click", loadLibrary);
+  document
+    .getElementById("btn-add-download")
+    ?.addEventListener("click", () => showView("download"));
 
   // Back buttons
   document.getElementById("btn-back-library")?.addEventListener("click", () => {
     showView("library");
-    document.querySelectorAll(".nav-link").forEach(a => a.classList.remove("active"));
+    document
+      .querySelectorAll(".nav-link")
+      .forEach((a) => a.classList.remove("active"));
     document.querySelector('[data-view="library"]')?.classList.add("active");
   });
-  document.getElementById("btn-back-series")?.addEventListener("click", goBackFromReader);
+  document
+    .getElementById("btn-back-series")
+    ?.addEventListener("click", goBackFromReader);
 
   // Download
-  document.getElementById("btn-start-download")?.addEventListener("click", startDownload);
-  document.getElementById("btn-cancel-download")?.addEventListener("click", async () => {
-    if (state.activeDownloadId) {
-      await window.strip.download.cancel(state.activeDownloadId);
-      state.activeDownloadId = null;
-      document.getElementById("dl-chapter-info").textContent = "Cancelled.";
-    }
-  });
+  document
+    .getElementById("btn-start-download")
+    ?.addEventListener("click", startDownload);
+  document
+    .getElementById("btn-cancel-download")
+    ?.addEventListener("click", async () => {
+      if (state.activeDownloadId) {
+        await window.strip.download.cancel(state.activeDownloadId);
+        state.activeDownloadId = null;
+        document.getElementById("dl-chapter-info").textContent = "Cancelled.";
+      }
+    });
 
   // Theme toggle
   document.getElementById("theme-toggle")?.addEventListener("click", () => {
@@ -525,22 +576,26 @@ async function init() {
   });
 
   // Settings: folder picker
-  document.getElementById("btn-change-folder")?.addEventListener("click", async () => {
-    const folder = await window.strip.dialog.openFolder();
-    if (folder) {
-      await window.strip.config.set({ downloadDir: folder });
-      state.config.downloadDir = folder;
-      document.getElementById("setting-download-dir").textContent = folder;
-    }
-  });
+  document
+    .getElementById("btn-change-folder")
+    ?.addEventListener("click", async () => {
+      const folder = await window.strip.dialog.openFolder();
+      if (folder) {
+        await window.strip.config.set({ downloadDir: folder });
+        state.config.downloadDir = folder;
+        document.getElementById("setting-download-dir").textContent = folder;
+      }
+    });
 
   // Settings: theme select
-  document.getElementById("setting-theme")?.addEventListener("change", async (e) => {
-    const theme = e.target.value;
-    applyTheme(theme);
-    await window.strip.theme.set(theme);
-    await window.strip.config.set({ theme });
-  });
+  document
+    .getElementById("setting-theme")
+    ?.addEventListener("change", async (e) => {
+      const theme = e.target.value;
+      applyTheme(theme);
+      await window.strip.theme.set(theme);
+      await window.strip.config.set({ theme });
+    });
 
   // Initial load
   await loadLibrary();
