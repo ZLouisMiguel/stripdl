@@ -5,6 +5,8 @@ A webtoon downloader and reader. Two parts that work together:
 - **Python CLI** – downloads webtoons from Webtoons.com to a clean local folder structure
 - **Electron app** – reads your local library with a beautiful scrolling reader
 
+> **Windows note:** The CLI is named `stripdl` to avoid conflicting with the GNU `strip` binary that ships with MinGW/Git for Windows.
+
 ---
 
 ## Quick start
@@ -16,24 +18,24 @@ A webtoon downloader and reader. Two parts that work together:
 pip install -e .
 
 # Download a series (all chapters)
-strip download "https://www.webtoons.com/en/action/tower-of-god/list?title_no=95"
+stripdl download "https://www.webtoons.com/en/action/tower-of-god/list?title_no=95"
 
 # Download a specific range
-strip download "https://www.webtoons.com/en/..." --chapters 1-20
+stripdl download "https://www.webtoons.com/en/..." --chapters 1-20
 
 # Download specific chapters
-strip download "https://www.webtoons.com/en/..." --chapters 1,5,10
+stripdl download "https://www.webtoons.com/en/..." --chapters 1,5,10
 
 # List available chapters without downloading
-strip list "https://www.webtoons.com/en/..."
+stripdl list "https://www.webtoons.com/en/..."
 
 # Show your local library
-strip library
+stripdl library
 
 # View / change config
-strip config
-strip config --set download_dir=/Users/you/Comics
-strip config --set image_quality=90
+stripdl config
+stripdl config --set download_dir=/Users/you/Comics
+stripdl config --set image_quality=90
 ```
 
 ### Electron reader app
@@ -110,7 +112,7 @@ Electron renderer
     │  clicks "Start Download"
     ▼
 Electron main process (index.js)
-    │  spawn("strip", ["download", url, "--json-progress"])
+    │  spawn("stripdl", ["download", url, "--json-progress"])
     ▼
 Python CLI (strip/cli.py)
     │  stdout → JSON lines
@@ -165,14 +167,14 @@ class MySiteParser(SiteParser):
 
 Config lives at `~/.strip/config.json`:
 
-| Key | Default | Description |
-|-----|---------|-------------|
-| `download_dir` | `~/strip-data` | Where to save comics |
-| `image_quality` | `85` | JPEG quality (1–95) |
-| `concurrent_downloads` | `4` | Parallel image downloads per chapter |
-| `chapter_delay` | `1.0` | Seconds between chapters (be polite) |
-| `overwrite` | `false` | Re-download existing chapters |
-| `theme` | `"system"` | Electron app theme |
+| Key                    | Default        | Description                          |
+| ---------------------- | -------------- | ------------------------------------ |
+| `download_dir`         | `~/strip-data` | Where to save comics                 |
+| `image_quality`        | `85`           | JPEG quality (1–95)                  |
+| `concurrent_downloads` | `4`            | Parallel image downloads per chapter |
+| `chapter_delay`        | `1.0`          | Seconds between chapters (be polite) |
+| `overwrite`            | `false`        | Re-download existing chapters        |
+| `theme`                | `"system"`     | Electron app theme                   |
 
 ---
 
@@ -182,22 +184,31 @@ Config lives at `~/.strip/config.json`:
 
 ```bash
 pip install pyinstaller
-pyinstaller --onefile --name strip strip/cli.py
-# Output: dist/strip (or dist/strip.exe on Windows)
+pyinstaller --onefile --name stripdl strip/cli.py
+# Output: dist/stripdl (or dist/stripdl.exe on Windows)
 ```
 
 ### Build Electron app with bundled CLI
 
 ```bash
 # Copy PyInstaller output into the right place
-cp dist/strip electron-app/
+cp dist/stripdl electron-app/
 
 # Build
 cd electron-app
 npm run build
 ```
 
-The `electron-builder` config in `package.json` copies the bundled `strip` binary as an `extraResource`, and `main/index.js` looks for it at `resources/strip-cli/strip` when packaged.
+The `electron-builder` config in `package.json` copies the bundled `stripdl` binary as an `extraResource`, and `main/index.js` looks for it at `resources/strip-cli/stripdl` when packaged.
+
+---
+
+## Known platform quirks
+
+| Platform | Issue                                           | Fix applied                                |
+| -------- | ----------------------------------------------- | ------------------------------------------ |
+| Windows  | `strip` conflicts with GNU Binutils `strip.exe` | CLI renamed to `stripdl`                   |
+| Windows  | `file://` paths need forward slashes            | `filePath.replace(/\\/g, "/")` in renderer |
 
 ---
 
