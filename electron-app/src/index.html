@@ -1,0 +1,178 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta http-equiv="Content-Security-Policy"
+    content="default-src 'self'; img-src 'self' file: data:; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; script-src 'self'" />
+  <title>Strip</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link
+    href="https://fonts.googleapis.com/css2?family=DM+Serif+Display:ital@0;1&family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,600;1,9..40,300&display=swap"
+    rel="stylesheet"
+  />
+  <link rel="stylesheet" href="css/main.css" />
+</head>
+<body data-theme="light">
+
+  <!-- ── Sidebar ─────────────────────────────────────────── -->
+  <nav id="sidebar">
+    <div class="sidebar-logo">
+      <span class="logo-mark">◈</span>
+      <span class="logo-text">strip</span>
+    </div>
+    <ul class="nav-links">
+      <li><a href="#" data-view="library" class="nav-link active">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="3" width="7" height="9" rx="1"/><rect x="14" y="3" width="7" height="5" rx="1"/><rect x="14" y="12" width="7" height="9" rx="1"/><rect x="3" y="16" width="7" height="5" rx="1"/></svg>
+        Library
+      </a></li>
+      <li><a href="#" data-view="download" class="nav-link">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 3v13M7 11l5 5 5-5"/><path d="M5 20h14"/></svg>
+        Download
+      </a></li>
+      <li><a href="#" data-view="settings" class="nav-link">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="3"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14M4.93 4.93a10 10 0 0 0 0 14.14"/><path d="M12 2v2M12 20v2M2 12h2M20 12h2"/></svg>
+        Settings
+      </a></li>
+    </ul>
+    <div class="sidebar-footer">
+      <button id="theme-toggle" title="Toggle theme">
+        <svg class="icon-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></svg>
+        <svg class="icon-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
+      </button>
+    </div>
+  </nav>
+
+  <!-- ── Main content area ────────────────────────────────── -->
+  <main id="main">
+
+    <!-- Library view -->
+    <section id="view-library" class="view active">
+      <header class="view-header">
+        <h1>Library</h1>
+        <div class="header-actions">
+          <button class="btn btn-primary" id="btn-add-download">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+            Add Comic
+          </button>
+          <button class="btn btn-ghost" id="btn-refresh-library" title="Refresh">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 .49-3.36"/></svg>
+          </button>
+        </div>
+      </header>
+      <div id="library-grid" class="series-grid">
+        <div class="empty-state" id="library-empty">
+          <div class="empty-icon">◈</div>
+          <p>Your library is empty.</p>
+          <p class="muted">Download a webtoon to get started.</p>
+          <button class="btn btn-primary" id="btn-empty-download">Download something</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- Series detail view -->
+    <section id="view-series" class="view">
+      <button class="btn btn-ghost back-btn" id="btn-back-library">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="15 18 9 12 15 6"/></svg>
+        Library
+      </button>
+      <div id="series-detail"></div>
+    </section>
+
+    <!-- Reader view -->
+    <section id="view-reader" class="view reader-view">
+      <div id="reader-toolbar">
+        <button class="btn btn-ghost" id="btn-back-series">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="15 18 9 12 15 6"/></svg>
+          Back
+        </button>
+        <span id="reader-title" class="reader-title-text"></span>
+        <div class="reader-controls">
+          <span id="reader-page-info"></span>
+          <button class="btn btn-ghost icon-btn" id="btn-reader-settings" title="Reader settings">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="3"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14M4.93 4.93a10 10 0 0 0 0 14.14"/></svg>
+          </button>
+        </div>
+      </div>
+      <div id="reader-container">
+        <div id="reader-pages"></div>
+      </div>
+    </section>
+
+    <!-- Download view -->
+    <section id="view-download" class="view">
+      <header class="view-header">
+        <h1>Download</h1>
+      </header>
+      <div class="download-form-wrap">
+        <div class="download-form card">
+          <label class="field-label">Webtoon URL</label>
+          <input type="url" id="download-url" class="input" placeholder="https://www.webtoons.com/en/…" />
+          <label class="field-label">Chapters <span class="muted">(optional)</span></label>
+          <input type="text" id="download-chapters" class="input" placeholder="e.g. 1-20 or 1,3,5" />
+          <div class="form-actions">
+            <button class="btn btn-primary btn-lg" id="btn-start-download">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3v13M7 11l5 5 5-5"/><path d="M5 20h14"/></svg>
+              Start Download
+            </button>
+          </div>
+        </div>
+
+        <!-- Progress card (hidden until download starts) -->
+        <div class="download-progress card" id="download-progress-card" style="display:none">
+          <div class="progress-header">
+            <span id="dl-series-title" class="progress-series">—</span>
+            <button class="btn btn-ghost icon-btn" id="btn-cancel-download" title="Cancel">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+            </button>
+          </div>
+          <div class="progress-chapter-info">
+            <span id="dl-chapter-info">Initializing…</span>
+          </div>
+          <div class="progress-bar-wrap">
+            <div class="progress-bar" id="dl-progress-bar"><div class="progress-fill" id="dl-progress-fill"></div></div>
+            <span class="progress-pct" id="dl-progress-pct">0%</span>
+          </div>
+          <div class="progress-log" id="dl-log"></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Settings view -->
+    <section id="view-settings" class="view">
+      <header class="view-header"><h1>Settings</h1></header>
+      <div class="settings-wrap">
+        <div class="settings-group card">
+          <h2 class="settings-group-title">Storage</h2>
+          <div class="setting-row">
+            <div>
+              <div class="setting-label">Download folder</div>
+              <div class="setting-value muted" id="setting-download-dir">—</div>
+            </div>
+            <button class="btn btn-secondary" id="btn-change-folder">Change</button>
+          </div>
+        </div>
+        <div class="settings-group card">
+          <h2 class="settings-group-title">Appearance</h2>
+          <div class="setting-row">
+            <div class="setting-label">Theme</div>
+            <select class="select" id="setting-theme">
+              <option value="system">System</option>
+              <option value="light">Light</option>
+              <option value="dark">Dark</option>
+            </select>
+          </div>
+        </div>
+        <div class="settings-group card">
+          <h2 class="settings-group-title">About</h2>
+          <p class="muted">strip v0.1.0 — webtoon downloader &amp; reader</p>
+        </div>
+      </div>
+    </section>
+
+  </main>
+
+  <script src="js/app.js"></script>
+</body>
+</html>
