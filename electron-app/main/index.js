@@ -92,7 +92,7 @@ function getStripCliPath() {
     if (fs.existsSync(bundledWin)) return bundledWin;
   }
   // Development: use system `strip` command
-  return "strip";
+  return "stripdl";
 }
 
 // ──────────────────────────────────────────────────────────────────
