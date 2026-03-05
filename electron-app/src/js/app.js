@@ -210,21 +210,74 @@ async function buildChapterRows(series) {
 // ──────────────────────────────────────────────────────────────────
 //  Reader
 // ──────────────────────────────────────────────────────────────────
+// ──────────────────────────────────────────────────────────────────
+//  Reader
+// ──────────────────────────────────────────────────────────────────
+
+function chapterIndex(series, chapter) {
+  return series.chapters.findIndex((c) => c.number === chapter.number);
+}
+
+function updateNavButtons() {
+  const series = state.currentSeries;
+  const chapter = state.currentChapter;
+  if (!series || !chapter) return;
+  const idx = chapterIndex(series, chapter);
+  const hasPrev = idx > 0;
+  const hasNext = idx < series.chapters.length - 1;
+
+  const btnPrev = document.getElementById("btn-prev-chapter");
+  const btnNext = document.getElementById("btn-next-chapter");
+  if (btnPrev) btnPrev.disabled = !hasPrev;
+  if (btnNext) btnNext.disabled = !hasNext;
+
+  const btnEndPrev = document.getElementById("btn-end-prev-chapter");
+  const btnEndNext = document.getElementById("btn-end-next-chapter");
+  if (btnEndPrev) btnEndPrev.disabled = !hasPrev;
+  if (btnEndNext) btnEndNext.disabled = !hasNext;
+
+  const endTitle = document.getElementById("chapter-end-title");
+  if (endTitle) {
+    if (hasNext) {
+      const next = series.chapters[idx + 1];
+      endTitle.textContent = `Ch ${next.number}  —  ${next.title}`;
+    } else {
+      endTitle.textContent = "You've reached the last downloaded chapter.";
+    }
+  }
+}
+
+function navigateChapter(direction) {
+  const series = state.currentSeries;
+  const chapter = state.currentChapter;
+  if (!series || !chapter) return;
+  const idx = chapterIndex(series, chapter);
+  const targetIdx = idx + direction;
+  if (targetIdx < 0 || targetIdx >= series.chapters.length) return;
+  openChapter(series, series.chapters[targetIdx]);
+}
+
 async function openChapter(series, chapter) {
   state.currentSeries = series;
   state.currentChapter = chapter;
   state.currentPageIndex = 0;
 
-  const toolbar = document.getElementById("reader-toolbar");
   const pagesEl = document.getElementById("reader-pages");
   const titleEl = document.getElementById("reader-title");
   const pageInfo = document.getElementById("reader-page-info");
+  const endOverlay = document.getElementById("chapter-end-overlay");
 
-  titleEl.textContent = `${series.title}  ·  Chapter ${chapter.number}`;
+  titleEl.textContent = `${series.title}  ·  Ch ${chapter.number}  —  ${chapter.title}`;
   pagesEl.innerHTML = "";
   pageInfo.textContent = "";
+  if (endOverlay) endOverlay.style.display = "none";
+
+  // Scroll to top on chapter switch
+  const existingContainer = document.getElementById("reader-container");
+  if (existingContainer) existingContainer.scrollTop = 0;
 
   showView("reader");
+  updateNavButtons();
 
   // Load pages
   let pages = [];
@@ -299,14 +352,19 @@ async function openChapter(series, chapter) {
     }, 200);
   }
 
-  // Save progress on scroll
+  // Clone container to wipe stale scroll listeners from previous chapter
+  const oldContainer = document.getElementById("reader-container");
+  const freshContainer = oldContainer.cloneNode(true);
+  oldContainer.parentNode.replaceChild(freshContainer, oldContainer);
   const container = document.getElementById("reader-container");
+
   let saveTimer = null;
+  let endShown = false;
+
   container.addEventListener(
     "scroll",
     () => {
-      // Find which image is most visible
-      const imgs = pagesEl.querySelectorAll("img");
+      const imgs = container.querySelectorAll("#reader-pages img");
       let visibleIdx = 0;
       imgs.forEach((img, i) => {
         const rect = img.getBoundingClientRect();
@@ -318,32 +376,46 @@ async function openChapter(series, chapter) {
       saveTimer = setTimeout(() => {
         window.strip.progress.set(progressKey, visibleIdx);
       }, 500);
+
+      // Show end-of-chapter card when within 200px of bottom
+      const dist =
+        container.scrollHeight - container.scrollTop - container.clientHeight;
+      const overlay = document.getElementById("chapter-end-overlay");
+      if (overlay && dist < 200 && !endShown) {
+        endShown = true;
+        overlay.style.display = "flex";
+        updateNavButtons();
+      }
     },
     { passive: true },
   );
 
-  // Keyboard navigation
-  const keyHandler = (e) => {
-    const container = document.getElementById("reader-container");
+  // Keyboard shortcuts
+  if (state._keyHandler)
+    document.removeEventListener("keydown", state._keyHandler);
+  state._keyHandler = (e) => {
+    const c = document.getElementById("reader-container");
+    if (!c) return;
     if (e.key === "ArrowDown" || e.key === "ArrowRight") {
-      container.scrollBy({
-        top: window.innerHeight * 0.85,
-        behavior: "smooth",
-      });
+      c.scrollBy({ top: window.innerHeight * 0.85, behavior: "smooth" });
     } else if (e.key === "ArrowUp" || e.key === "ArrowLeft") {
-      container.scrollBy({
-        top: -window.innerHeight * 0.85,
-        behavior: "smooth",
-      });
+      c.scrollBy({ top: -window.innerHeight * 0.85, behavior: "smooth" });
     } else if (e.key === "Escape") {
-      document.removeEventListener("keydown", keyHandler);
       goBackFromReader();
+    } else if (e.key === "]" || e.key === "n") {
+      navigateChapter(1);
+    } else if (e.key === "[" || e.key === "p") {
+      navigateChapter(-1);
     }
   };
-  document.addEventListener("keydown", keyHandler);
+  document.addEventListener("keydown", state._keyHandler);
 }
 
 function goBackFromReader() {
+  if (state._keyHandler) {
+    document.removeEventListener("keydown", state._keyHandler);
+    state._keyHandler = null;
+  }
   if (state.currentSeries) {
     showView("series");
     // Re-highlight series nav as "library"
@@ -355,7 +427,6 @@ function goBackFromReader() {
     showView("library");
   }
 }
-
 // ──────────────────────────────────────────────────────────────────
 //  Download
 // ──────────────────────────────────────────────────────────────────
