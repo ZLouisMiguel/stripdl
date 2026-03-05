@@ -627,23 +627,34 @@ body {
   height: var(--toolbar-h);
   background: var(--bg-raised);
   border-bottom: 1px solid var(--border);
-  display: flex;
+  display: grid;
+  grid-template-columns: auto 1fr auto;
   align-items: center;
-  padding: 0 16px;
-  gap: 12px;
+  padding: 0 12px;
+  gap: 8px;
   z-index: 100;
   backdrop-filter: blur(8px);
   -webkit-backdrop-filter: blur(8px);
 }
 
+/* Center column: prev ← title → next */
+.reader-chapter-nav {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-width: 0;
+}
+
 .reader-title-text {
-  flex: 1;
   font-size: 13.5px;
   font-weight: 500;
   color: var(--text-secondary);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  max-width: 420px;
+  text-align: center;
 }
 
 .reader-controls {
@@ -652,6 +663,15 @@ body {
   gap: 10px;
   color: var(--text-muted);
   font-size: 13px;
+  white-space: nowrap;
+}
+
+/* Disabled nav button style */
+#btn-prev-chapter:disabled,
+#btn-next-chapter:disabled {
+  opacity: 0.25;
+  cursor: default;
+  pointer-events: none;
 }
 
 /* ── Reader container ────────────────────────────────────── */
@@ -915,6 +935,57 @@ body {
 }
 .series-card:nth-child(10) {
   animation-delay: 360ms;
+}
+
+/* ── End-of-chapter overlay ──────────────────────────────── */
+#chapter-end-overlay {
+  padding: 40px 20px 80px;
+  display: flex;
+  justify-content: center;
+}
+
+.chapter-end-card {
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  border-radius: var(--r-xl);
+  padding: 32px 40px;
+  text-align: center;
+  max-width: 420px;
+  width: 100%;
+  box-shadow: var(--shadow-md);
+  animation: fadeUp 0.3s ease both;
+}
+
+.chapter-end-label {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--steel);
+  margin-bottom: 8px;
+}
+
+.chapter-end-title {
+  font-family: var(--font-display);
+  font-size: 18px;
+  color: var(--text);
+  margin-bottom: 24px;
+  line-height: 1.3;
+}
+
+.chapter-end-actions {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+#btn-end-prev-chapter:disabled,
+#btn-end-next-chapter:disabled {
+  opacity: 0.3;
+  cursor: default;
+  pointer-events: none;
 }
 
 /* ── Scrollbar ───────────────────────────────────────────── */
