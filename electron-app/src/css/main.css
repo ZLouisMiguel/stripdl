@@ -183,7 +183,7 @@ body {
 
 .nav-link:hover {
   background: var(--sidebar-hover);
-  color: #d4cec2;
+  color: var(--sidebar-active);
 }
 
 .nav-link.active {
@@ -208,12 +208,18 @@ body {
   display: flex;
   align-items: center;
   gap: 6px;
-  transition: background 0.15s;
+  transition:
+    background 0.15s,
+    border-color 0.15s,
+    color 0.15s;
   width: 100%;
   justify-content: center;
+  cursor: pointer;
 }
 #theme-toggle:hover {
   background: var(--sidebar-hover);
+  border-color: var(--steel);
+  color: var(--sidebar-active);
 }
 #theme-toggle svg {
   width: 15px;
@@ -309,9 +315,13 @@ body {
 .btn-primary {
   background: var(--steel);
   color: #fff;
+  transition:
+    background 0.15s,
+    box-shadow 0.15s;
 }
 .btn-primary:hover {
   background: var(--steel-dark);
+  box-shadow: 0 2px 10px rgba(97, 148, 178, 0.4);
 }
 
 .btn-secondary {
@@ -319,17 +329,23 @@ body {
   color: var(--text);
 }
 .btn-secondary:hover {
-  background: var(--parchment-border);
+  background: var(--border);
+  filter: brightness(0.9);
 }
 
 .btn-ghost {
   background: transparent;
   color: var(--text-secondary);
   border: 1px solid var(--border);
+  transition:
+    background 0.15s,
+    color 0.15s,
+    border-color 0.15s;
 }
 .btn-ghost:hover {
   background: var(--bg-surface);
   color: var(--text);
+  border-color: var(--steel);
 }
 
 .btn-lg {
@@ -419,6 +435,10 @@ body {
   display: -webkit-box;
   -webkit-line-clamp: 2;
   -webkit-box-orient: vertical;
+  transition: color 0.15s;
+}
+.series-card:hover .series-card-title {
+  color: var(--steel);
 }
 
 .series-card-meta {
@@ -582,7 +602,10 @@ body {
 
 .chapter-row:hover {
   background: var(--bg-surface);
-  border-color: var(--border-subtle);
+  border-color: var(--border);
+}
+.chapter-row:hover .chapter-num {
+  color: var(--steel-light);
 }
 
 .chapter-num {
@@ -759,8 +782,13 @@ body {
   outline: none;
   transition: border-color 0.15s;
 }
+.input:hover {
+  border-color: var(--text-muted);
+}
 .input:focus {
   border-color: var(--steel);
+  box-shadow: 0 0 0 3px var(--steel-muted);
+  outline: none;
 }
 .input::placeholder {
   color: var(--text-muted);
@@ -877,6 +905,14 @@ body {
   font-size: 13.5px;
   outline: none;
   cursor: pointer;
+  transition: border-color 0.15s;
+}
+.select:hover {
+  border-color: var(--text-muted);
+}
+.select:focus {
+  border-color: var(--steel);
+  box-shadow: 0 0 0 3px var(--steel-muted);
 }
 
 /* ── Utilities ───────────────────────────────────────────── */
