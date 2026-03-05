@@ -23,7 +23,7 @@ setup(
     entry_points={
         "console_scripts": [
             # This is what makes `strip` available as a terminal command
-            "strip=strip.cli:main",
+            "stripdl=strip.cli:main",
         ],
     },
     classifiers=[
