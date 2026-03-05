@@ -182,99 +182,51 @@ async function buildChapterRows(series) {
   if (!series.chapters?.length)
     return "<p class='muted' style='padding:20px'>No chapters downloaded.</p>";
 
-  const rows = [];
-  for (let i = 0; i < series.chapters.length; i++) {
-    const ch = series.chapters[i];
-    const progressKey = `${series.title}/${ch.number}`;
-    let savedPage = 0;
-    try {
-      savedPage = await window.strip.progress.get(progressKey);
-    } catch (_) {}
-    const hasProgress = savedPage > 0;
-    rows.push(`
-      <div class="chapter-row ${hasProgress ? "has-progress" : ""}" data-chapter-index="${i}">
-        <span class="chapter-num">${ch.number}</span>
-        <span class="chapter-title">${esc(ch.title)}</span>
-        <div style="display:flex;align-items:center;gap:10px">
-          <span class="chapter-date">${esc(ch.date ?? "")}</span>
-          <div class="chapter-progress-dot" title="In progress"></div>
+  // Fetch ALL progress keys in parallel — not one await per chapter.
+  // A 200-chapter series would hang for several seconds doing it sequentially.
+  const progressResults = await Promise.all(
+    series.chapters.map((ch) =>
+      window.strip.progress.get(`${series.title}/${ch.number}`).catch(() => 0),
+    ),
+  );
+
+  return series.chapters
+    .map((ch, i) => {
+      const hasProgress = progressResults[i] > 0;
+      return `
+        <div class="chapter-row ${hasProgress ? "has-progress" : ""}" data-chapter-index="${i}">
+          <span class="chapter-num">${ch.number}</span>
+          <span class="chapter-title">${esc(ch.title)}</span>
+          <div style="display:flex;align-items:center;gap:10px">
+            <span class="chapter-date">${esc(ch.date ?? "")}</span>
+            <div class="chapter-progress-dot" title="In progress"></div>
+          </div>
         </div>
-      </div>
-    `);
-  }
-  return rows.join("");
+      `;
+    })
+    .join("");
 }
 
 // ──────────────────────────────────────────────────────────────────
 //  Reader
 // ──────────────────────────────────────────────────────────────────
-
-function chapterIndex(series, chapter) {
-  return series.chapters.findIndex((c) => c.number === chapter.number);
-}
-
-function updateNavButtons() {
-  const series = state.currentSeries;
-  const chapter = state.currentChapter;
-  if (!series || !chapter) return;
-
-  const idx = chapterIndex(series, chapter);
-  const hasPrev = idx > 0;
-  const hasNext = idx < series.chapters.length - 1;
-
-  const btnPrev = document.getElementById("btn-prev-chapter");
-  const btnNext = document.getElementById("btn-next-chapter");
-  if (btnPrev) btnPrev.disabled = !hasPrev;
-  if (btnNext) btnNext.disabled = !hasNext;
-
-  const btnEndPrev = document.getElementById("btn-end-prev-chapter");
-  const btnEndNext = document.getElementById("btn-end-next-chapter");
-  if (btnEndPrev) btnEndPrev.disabled = !hasPrev;
-  if (btnEndNext) btnEndNext.disabled = !hasNext;
-
-  const endTitle = document.getElementById("chapter-end-title");
-  if (endTitle) {
-    if (hasNext) {
-      const next = series.chapters[idx + 1];
-      endTitle.textContent = `Ch ${next.number}  —  ${next.title}`;
-    } else {
-      endTitle.textContent = "You've reached the last downloaded chapter.";
-    }
-  }
-}
-
-function navigateChapter(direction) {
-  const series = state.currentSeries;
-  const chapter = state.currentChapter;
-  if (!series || !chapter) return;
-  const idx = chapterIndex(series, chapter);
-  const targetIdx = idx + direction;
-  if (targetIdx < 0 || targetIdx >= series.chapters.length) return;
-  openChapter(series, series.chapters[targetIdx]);
-}
-
 async function openChapter(series, chapter) {
   state.currentSeries = series;
   state.currentChapter = chapter;
   state.currentPageIndex = 0;
 
+  const toolbar = document.getElementById("reader-toolbar");
   const pagesEl = document.getElementById("reader-pages");
   const titleEl = document.getElementById("reader-title");
   const pageInfo = document.getElementById("reader-page-info");
-  const endOverlay = document.getElementById("chapter-end-overlay");
 
-  titleEl.textContent = `${series.title}  ·  Ch ${chapter.number}  —  ${chapter.title}`;
+  titleEl.textContent = `${series.title}  ·  Chapter ${chapter.number}`;
   pagesEl.innerHTML = "";
   pageInfo.textContent = "";
-  if (endOverlay) endOverlay.style.display = "none";
-
-  // Scroll to top on chapter switch
-  const readerContainer = document.getElementById("reader-container");
-  if (readerContainer) readerContainer.scrollTop = 0;
 
   showView("reader");
-  updateNavButtons();
 
+  // Load pages
   let pages = [];
   try {
     pages = await window.strip.chapter.pages(chapter.directory);
@@ -290,13 +242,16 @@ async function openChapter(series, chapter) {
     return;
   }
 
+  // Restore progress
   const progressKey = `${series.title}/${chapter.number}`;
   let startPage = 0;
   try {
     startPage = await window.strip.progress.get(progressKey);
   } catch (_) {}
 
-  // Build images — local file:// loads are instant, no lazy loading needed
+  // Build image elements
+  // Local file:// images load near-instantly — no need for lazy loading.
+  // We just set src directly and let the browser handle it.
   pages.forEach((filePath, i) => {
     const wrapper = document.createElement("div");
     wrapper.style.width = "100%";
@@ -308,8 +263,11 @@ async function openChapter(series, chapter) {
 
     const img = document.createElement("img");
     img.className = "reader-page-img";
+    // Windows paths use backslashes — file:// URLs require forward slashes
+    const fileUrl = "file:///" + filePath.replace(/\\/g, "/");
     img.alt = `Page ${i + 1}`;
     img.style.display = "none";
+
     img.onload = () => {
       shimmer.remove();
       img.style.display = "block";
@@ -321,34 +279,34 @@ async function openChapter(series, chapter) {
       err.textContent = `Page ${i + 1} could not be loaded.`;
       wrapper.appendChild(err);
     };
-    img.src = "file:///" + filePath.replace(/\\/g, "/");
+
+    // Set src immediately — local files are fast, no lazy-loading needed
+    img.src = fileUrl;
+
     wrapper.appendChild(img);
     pagesEl.appendChild(wrapper);
   });
 
   pageInfo.textContent = `${pages.length} pages`;
 
+  // Scroll to saved progress
   if (startPage > 0 && startPage < pages.length) {
     setTimeout(() => {
       const imgs = pagesEl.querySelectorAll("img");
-      if (imgs[startPage]) imgs[startPage].closest("div")?.scrollIntoView();
-    }, 150);
+      if (imgs[startPage]) {
+        imgs[startPage].closest("div")?.scrollIntoView({ behavior: "smooth" });
+      }
+    }, 200);
   }
 
-  // Scroll: save progress + show end-of-chapter overlay
+  // Save progress on scroll
   const container = document.getElementById("reader-container");
   let saveTimer = null;
-  let endShown = false;
-
-  // Clone to remove any leftover listeners from previous chapter
-  const fresh = container.cloneNode(true);
-  container.parentNode.replaceChild(fresh, container);
-  const liveContainer = document.getElementById("reader-container");
-
-  liveContainer.addEventListener(
+  container.addEventListener(
     "scroll",
     () => {
-      const imgs = liveContainer.querySelectorAll("#reader-pages img");
+      // Find which image is most visible
+      const imgs = pagesEl.querySelectorAll("img");
       let visibleIdx = 0;
       imgs.forEach((img, i) => {
         const rect = img.getBoundingClientRect();
@@ -360,50 +318,35 @@ async function openChapter(series, chapter) {
       saveTimer = setTimeout(() => {
         window.strip.progress.set(progressKey, visibleIdx);
       }, 500);
-
-      // Reveal end-of-chapter card when near bottom
-      const dist =
-        liveContainer.scrollHeight -
-        liveContainer.scrollTop -
-        liveContainer.clientHeight;
-      const overlay = document.getElementById("chapter-end-overlay");
-      if (overlay && dist < 200 && !endShown) {
-        endShown = true;
-        overlay.style.display = "flex";
-        updateNavButtons();
-      }
     },
     { passive: true },
   );
 
-  // Keyboard shortcuts
-  if (state._keyHandler)
-    document.removeEventListener("keydown", state._keyHandler);
-  state._keyHandler = (e) => {
-    const c = document.getElementById("reader-container");
-    if (!c) return;
+  // Keyboard navigation
+  const keyHandler = (e) => {
+    const container = document.getElementById("reader-container");
     if (e.key === "ArrowDown" || e.key === "ArrowRight") {
-      c.scrollBy({ top: window.innerHeight * 0.85, behavior: "smooth" });
+      container.scrollBy({
+        top: window.innerHeight * 0.85,
+        behavior: "smooth",
+      });
     } else if (e.key === "ArrowUp" || e.key === "ArrowLeft") {
-      c.scrollBy({ top: -window.innerHeight * 0.85, behavior: "smooth" });
+      container.scrollBy({
+        top: -window.innerHeight * 0.85,
+        behavior: "smooth",
+      });
     } else if (e.key === "Escape") {
+      document.removeEventListener("keydown", keyHandler);
       goBackFromReader();
-    } else if (e.key === "]" || e.key === "n") {
-      navigateChapter(1);
-    } else if (e.key === "[" || e.key === "p") {
-      navigateChapter(-1);
     }
   };
-  document.addEventListener("keydown", state._keyHandler);
+  document.addEventListener("keydown", keyHandler);
 }
 
 function goBackFromReader() {
-  if (state._keyHandler) {
-    document.removeEventListener("keydown", state._keyHandler);
-    state._keyHandler = null;
-  }
   if (state.currentSeries) {
     showView("series");
+    // Re-highlight series nav as "library"
     document
       .querySelectorAll(".nav-link")
       .forEach((a) => a.classList.remove("active"));
@@ -590,25 +533,6 @@ async function init() {
   });
   document
     .getElementById("btn-back-series")
-    ?.addEventListener("click", goBackFromReader);
-
-  // Reader chapter navigation — toolbar buttons
-  document
-    .getElementById("btn-prev-chapter")
-    ?.addEventListener("click", () => navigateChapter(-1));
-  document
-    .getElementById("btn-next-chapter")
-    ?.addEventListener("click", () => navigateChapter(1));
-
-  // Reader chapter navigation — end-of-chapter overlay buttons
-  document
-    .getElementById("btn-end-prev-chapter")
-    ?.addEventListener("click", () => navigateChapter(-1));
-  document
-    .getElementById("btn-end-next-chapter")
-    ?.addEventListener("click", () => navigateChapter(1));
-  document
-    .getElementById("btn-end-back")
     ?.addEventListener("click", goBackFromReader);
 
   // Download
