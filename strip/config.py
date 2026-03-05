@@ -17,6 +17,8 @@ _DEFAULTS: dict = {
     "image_quality": 85,
     # Maximum concurrent image downloads per chapter
     "concurrent_downloads": 4,
+    # Maximum concurrent chapter downloads (each chapter still parallelises its images)
+    "concurrent_chapters": 3,
     # Delay between chapter downloads (seconds) – be polite
     "chapter_delay": 1.0,
     # Whether to overwrite already-downloaded chapters
