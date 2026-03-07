@@ -565,6 +565,7 @@ body {
   display: -webkit-box;
   -webkit-line-clamp: 4;
   -webkit-box-orient: vertical;
+  line-clamp: 4px;
   overflow: hidden;
 }
 
@@ -1038,4 +1039,126 @@ body {
 }
 ::-webkit-scrollbar-thumb:hover {
   background: var(--text-muted);
+}
+/* ── Continue Reading Feature ───────────────────────────── */
+
+.series-card-continue-badge {
+  position: absolute;
+  top: 6px;
+  left: 6px;
+  background: var(--steel);
+  color: white;
+  font-size: 10px;
+  font-weight: 600;
+  padding: 4px 10px;
+  border-radius: 100px;
+  backdrop-filter: blur(4px);
+  cursor: pointer;
+  z-index: 20;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.25);
+  transition: all 0.15s ease;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  font-family: var(--font-body);
+  pointer-events: auto;
+}
+
+.series-card-continue-badge:hover {
+  background: var(--steel-dark);
+  transform: translateY(-1px);
+  box-shadow: 0 4px 8px rgba(0, 0, 0, 0.3);
+}
+
+.series-card-continue-badge:active {
+  transform: translateY(0);
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
+}
+
+[data-theme="dark"] .series-card-continue-badge {
+  background: var(--steel-light);
+  color: #000;
+  border-color: rgba(0, 0, 0, 0.2);
+}
+
+/* Chapter row last read indicator */
+.chapter-row.last-read {
+  background: var(--steel-muted);
+  border-left: 3px solid var(--steel);
+  position: relative;
+}
+
+.chapter-row.last-read .chapter-num {
+  color: var(--steel-dark);
+  font-weight: 600;
+}
+
+.chapter-row.last-read::after {
+  content: "Last read";
+  position: absolute;
+  right: 14px;
+  font-size: 10px;
+  color: var(--steel);
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  background: var(--bg-raised);
+  padding: 2px 6px;
+  border-radius: 100px;
+  border: 1px solid var(--border);
+}
+
+/* Continue button in series detail */
+#btn-continue-reading {
+  background: var(--steel);
+  color: white;
+  border: none;
+}
+
+#btn-continue-reading:hover {
+  background: var(--steel-dark);
+  box-shadow: 0 2px 10px rgba(97, 148, 178, 0.4);
+}
+
+/* Last read indicator in series detail header */
+.last-read-indicator {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  color: var(--steel);
+  margin-left: 8px;
+  font-weight: normal;
+  background: var(--steel-muted);
+  padding: 2px 8px;
+  border-radius: 100px;
+  border: 1px solid var(--border);
+}
+
+.last-read-indicator svg {
+  width: 12px;
+  height: 12px;
+}
+
+/* Reading progress bar in series card (optional enhancement) */
+.series-card-progress {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  height: 3px;
+  background: rgba(0, 0, 0, 0.1);
+  overflow: hidden;
+}
+
+.series-card-progress-fill {
+  height: 100%;
+  background: var(--steel);
+  width: 0%;
+  transition: width 0.3s ease;
+}
+
+/* Ensure series-cover-wrap has proper positioning */
+.series-cover-wrap {
+  position: relative;
+  overflow: visible;
 }
