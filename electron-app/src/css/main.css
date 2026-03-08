@@ -791,7 +791,7 @@ body {
   border-radius: var(--r-xl);
   padding: 40px 48px;
   text-align: center;
-  max-width: 520px;
+  max-width: 600px;
   width: 100%;
   box-shadow: var(--shadow-lg);
 }
