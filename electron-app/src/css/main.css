@@ -564,7 +564,6 @@ body {
   display: -webkit-box;
   -webkit-line-clamp: 4;
   -webkit-box-orient: vertical;
-  line-clamp: 4px;
   overflow: hidden;
 }
 
@@ -660,7 +659,6 @@ body {
   -webkit-backdrop-filter: blur(8px);
 }
 
-/* Center column: prev ← title → next - made wider */
 .reader-chapter-nav {
   display: flex;
   align-items: center;
@@ -693,7 +691,6 @@ body {
   white-space: nowrap;
 }
 
-/* Disabled nav button style */
 #btn-prev-chapter:disabled,
 #btn-next-chapter:disabled {
   opacity: 0.25;
@@ -713,15 +710,14 @@ body {
   scrollbar-color: var(--border) transparent;
 }
 
-/* Standard webcomic reading layout: centered column, wider max-width */
 #reader-pages {
   display: flex;
   flex-direction: column;
   align-items: center;
   gap: 0;
-  max-width: 1000px; /* Increased from 800px */
+  max-width: 1000px;
   margin: 0 auto;
-  padding: 20px 0 80px; /* Increased bottom padding for overlay */
+  padding: 20px 0 80px;
 }
 
 .reader-page-img {
@@ -757,6 +753,90 @@ body {
   font-size: 13px;
   border: 1px dashed var(--border);
   border-radius: var(--r-sm);
+}
+
+/* ── End-of-chapter overlay ──────────────────────────────── */
+/*
+ * Fixed-position and outside #reader-container, so toggling .is-visible
+ * never changes scrollHeight and never retriggers the scroll listener.
+ * Visibility is purely opacity + transform on the class — zero display
+ * changes, zero layout reflow, zero flicker.
+ */
+#chapter-end-overlay {
+  position: fixed;
+  left: var(--sidebar-w);
+  right: 0;
+  bottom: 0;
+  padding: 32px 20px 48px;
+  display: flex;
+  justify-content: center;
+  pointer-events: none;
+  opacity: 0;
+  transform: translateY(16px);
+  transition:
+    opacity 0.22s ease,
+    transform 0.22s ease;
+  z-index: 90;
+}
+
+#chapter-end-overlay.is-visible {
+  opacity: 1;
+  transform: translateY(0);
+  pointer-events: auto;
+}
+
+.chapter-end-card {
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  border-radius: var(--r-xl);
+  padding: 40px 48px;
+  text-align: center;
+  max-width: 520px;
+  width: 100%;
+  box-shadow: var(--shadow-lg);
+}
+
+.chapter-end-label {
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--steel);
+  margin-bottom: 12px;
+}
+
+.chapter-end-title {
+  font-family: var(--font-display);
+  font-size: 22px;
+  color: var(--text);
+  margin-bottom: 28px;
+  line-height: 1.4;
+}
+
+.chapter-end-actions {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.chapter-end-actions .btn {
+  padding: 10px 24px;
+  font-size: 14px;
+  gap: 10px;
+}
+
+.chapter-end-actions .btn svg {
+  width: 16px;
+  height: 16px;
+}
+
+#btn-end-prev-chapter:disabled,
+#btn-end-next-chapter:disabled {
+  opacity: 0.3;
+  cursor: default;
+  pointer-events: none;
 }
 
 /* ── Download view ───────────────────────────────────────── */
@@ -798,7 +878,6 @@ body {
 .input:focus {
   border-color: var(--steel);
   box-shadow: 0 0 0 3px var(--steel-muted);
-  outline: none;
 }
 .input::placeholder {
   color: var(--text-muted);
@@ -810,7 +889,6 @@ body {
   gap: 10px;
 }
 
-/* Progress card */
 .progress-header {
   display: flex;
   align-items: center;
@@ -951,7 +1029,6 @@ body {
   }
 }
 
-/* Stagger grid cards */
 .series-card:nth-child(1) {
   animation-delay: 0ms;
 }
@@ -983,74 +1060,6 @@ body {
   animation-delay: 360ms;
 }
 
-/* ── End-of-chapter overlay ──────────────────────────────── */
-#chapter-end-overlay {
-  padding: 60px 20px 100px; /* Increased padding */
-  display: flex;
-  justify-content: center;
-  opacity: 0;
-  transition: opacity 0.3s ease;
-}
-
-#chapter-end-overlay[style*="display: flex"] {
-  opacity: 1;
-}
-
-.chapter-end-card {
-  background: var(--bg-raised);
-  border: 1px solid var(--border);
-  border-radius: var(--r-xl);
-  padding: 40px 48px; /* Increased padding */
-  text-align: center;
-  max-width: 520px; /* Increased from 420px */
-  width: 100%;
-  box-shadow: var(--shadow-lg);
-  animation: fadeUp 0.4s ease both;
-}
-
-.chapter-end-label {
-  font-size: 12px;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
-  color: var(--steel);
-  margin-bottom: 12px;
-}
-
-.chapter-end-title {
-  font-family: var(--font-display);
-  font-size: 22px; /* Increased from 18px */
-  color: var(--text);
-  margin-bottom: 28px; /* Increased from 24px */
-  line-height: 1.4;
-}
-
-.chapter-end-actions {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 16px; /* Increased from 10px */
-  flex-wrap: wrap;
-}
-
-.chapter-end-actions .btn {
-  padding: 10px 24px; /* Larger buttons */
-  font-size: 14px;
-  gap: 10px;
-}
-
-.chapter-end-actions .btn svg {
-  width: 16px;
-  height: 16px;
-}
-
-#btn-end-prev-chapter:disabled,
-#btn-end-next-chapter:disabled {
-  opacity: 0.3;
-  cursor: default;
-  pointer-events: none;
-}
-
 /* ── Scrollbar ───────────────────────────────────────────── */
 ::-webkit-scrollbar {
   width: 8px;
@@ -1066,8 +1075,8 @@ body {
 ::-webkit-scrollbar-thumb:hover {
   background: var(--text-muted);
 }
-/* ── Continue Reading Feature ───────────────────────────── */
 
+/* ── Continue Reading ────────────────────────────────────── */
 .series-card-continue-badge {
   position: absolute;
   top: 6px;
@@ -1107,7 +1116,6 @@ body {
   border-color: rgba(0, 0, 0, 0.2);
 }
 
-/* Chapter row last read indicator */
 .chapter-row.last-read {
   background: var(--steel-muted);
   border-left: 3px solid var(--steel);
@@ -1133,7 +1141,6 @@ body {
   border: 1px solid var(--border);
 }
 
-/* Continue button in series detail */
 #btn-continue-reading {
   background: var(--steel);
   color: white;
@@ -1145,7 +1152,6 @@ body {
   box-shadow: 0 2px 10px rgba(97, 148, 178, 0.4);
 }
 
-/* Last read indicator in series detail header */
 .last-read-indicator {
   display: inline-flex;
   align-items: center;
@@ -1160,12 +1166,6 @@ body {
   border: 1px solid var(--border);
 }
 
-.last-read-indicator svg {
-  width: 12px;
-  height: 12px;
-}
-
-/* Reading progress bar in series card */
 .series-card-progress {
   position: absolute;
   bottom: 0;
@@ -1181,10 +1181,4 @@ body {
   background: var(--steel);
   width: 0%;
   transition: width 0.3s ease;
-}
-
-/* Ensure series-cover-wrap has proper positioning */
-.series-cover-wrap {
-  position: relative;
-  overflow: visible;
 }
