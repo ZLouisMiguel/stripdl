@@ -103,8 +103,12 @@ class WebtoonsParser(SiteParser):
         description = desc_el.get_text(strip=True) if desc_el else ""
 
         # ---- cover image
-        cover_el = soup.select_one(".detail_body .thmb img") or soup.select_one(
-            "img#thumbnail"
+        # The series header (.detail_header .thmb img) has the character/cover art.
+        # .detail_body .thmb img only appears in episode list rows (wrong image).
+        cover_el = (
+            soup.select_one(".detail_header .thmb img")
+            or soup.select_one(".detail_header img")
+            or soup.select_one("img#thumbnail")
         )
         cover_url = ""
         if cover_el:
