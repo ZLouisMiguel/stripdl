@@ -22,7 +22,6 @@ const state = {
 //  Continue Reading Feature
 // ──────────────────────────────────────────────────────────────────
 
-// Track last read position for a series
 async function updateLastReadPosition(
   seriesTitle,
   chapterNumber,
@@ -30,91 +29,49 @@ async function updateLastReadPosition(
   totalPages,
 ) {
   try {
-    const lastReadKey = `${seriesTitle}/lastRead`;
-    const lastReadData = {
-      chapterNumber: chapterNumber,
-      pageIndex: pageIndex,
-      totalPages: totalPages,
+    await window.strip.progress.set(`${seriesTitle}/lastRead`, {
+      chapterNumber,
+      pageIndex,
+      totalPages,
       timestamp: Date.now(),
-    };
-    await window.strip.progress.set(lastReadKey, lastReadData);
-
-    // Also update a "recently read" timestamp for sorting later if needed
-    const recentKey = `${seriesTitle}/recentlyRead`;
-    await window.strip.progress.set(recentKey, Date.now());
+    });
+    await window.strip.progress.set(`${seriesTitle}/recentlyRead`, Date.now());
   } catch (e) {
     console.error("Failed to update last read position:", e);
   }
 }
 
-// Get last read position for a series
 async function getLastReadPosition(seriesTitle) {
   try {
-    const lastReadKey = `${seriesTitle}/lastRead`;
-    return await window.strip.progress.get(lastReadKey);
+    return await window.strip.progress.get(`${seriesTitle}/lastRead`);
   } catch (e) {
     return null;
   }
 }
 
-// Find the last read chapter for a series
-async function findLastReadChapter(series) {
-  if (!series || !series.chapters?.length) return null;
-
-  const lastRead = await getLastReadPosition(series.title);
-  if (!lastRead) return null;
-
-  // Find the chapter with matching number
-  const chapter = series.chapters.find(
-    (ch) => ch.number == lastRead.chapterNumber,
-  );
-  return chapter || null;
-}
-
-// Continue reading from last saved position
 async function continueReading(series) {
   if (!series || !series.chapters?.length) return;
-
   const lastRead = await getLastReadPosition(series.title);
-
   if (!lastRead) {
-    // If no saved progress, just open the first chapter
     openChapter(series, series.chapters[0]);
     return;
   }
-
-  // Find the chapter
   const chapter = series.chapters.find(
     (ch) => ch.number == lastRead.chapterNumber,
   );
-  if (!chapter) {
-    // Chapter not found (maybe deleted?), open first chapter
-    openChapter(series, series.chapters[0]);
-    return;
-  }
-
-  // Open chapter and scroll to saved page
-  await openChapter(series, chapter, lastRead.pageIndex);
+  await openChapter(series, chapter || series.chapters[0], lastRead.pageIndex);
 }
 
-// Get reading progress percentage for a series
 async function getSeriesProgress(series) {
   if (!series || !series.chapters?.length) return 0;
-
   const lastRead = await getLastReadPosition(series.title);
   if (!lastRead) return 0;
-
-  // Find chapter index
   const chapterIndex = series.chapters.findIndex(
     (ch) => ch.number == lastRead.chapterNumber,
   );
   if (chapterIndex === -1) return 0;
-
-  // Calculate rough progress: (chapters completed + current chapter progress) / total chapters
-  const chaptersCompleted = chapterIndex;
   const chapterProgress = lastRead.pageIndex / (lastRead.totalPages || 1);
-
-  return ((chaptersCompleted + chapterProgress) / series.chapters.length) * 100;
+  return ((chapterIndex + chapterProgress) / series.chapters.length) * 100;
 }
 
 // ──────────────────────────────────────────────────────────────────
@@ -127,13 +84,8 @@ function showView(id) {
   document
     .querySelectorAll(".nav-link")
     .forEach((a) => a.classList.remove("active"));
-
-  const view = document.getElementById(`view-${id}`);
-  if (view) view.classList.add("active");
-
-  const navLink = document.querySelector(`[data-view="${id}"]`);
-  if (navLink) navLink.classList.add("active");
-
+  document.getElementById(`view-${id}`)?.classList.add("active");
+  document.querySelector(`[data-view="${id}"]`)?.classList.add("active");
   state.currentView = id;
 }
 
@@ -142,7 +94,6 @@ function showView(id) {
 // ──────────────────────────────────────────────────────────────────
 async function loadLibrary() {
   const grid = document.getElementById("library-grid");
-  const empty = document.getElementById("library-empty");
 
   grid.innerHTML =
     '<div class="empty-state"><div class="empty-icon">◈</div><p style="color:var(--text-muted)">Loading…</p></div>';
@@ -161,15 +112,13 @@ async function loadLibrary() {
     return;
   }
 
-  // Sort library by recently read (optional)
   const libraryWithProgress = await Promise.all(
-    state.library.map(async (series) => {
-      const progress = await getSeriesProgress(series);
-      return { ...series, progress };
-    }),
+    state.library.map(async (series) => ({
+      ...series,
+      progress: await getSeriesProgress(series),
+    })),
   );
 
-  // Sort by progress (those with progress first) and then by title
   libraryWithProgress.sort((a, b) => {
     if (a.progress > 0 && b.progress === 0) return -1;
     if (a.progress === 0 && b.progress > 0) return 1;
@@ -191,11 +140,9 @@ function buildEmptyState() {
     <p class="muted">Download a webtoon to get started.</p>
     <button class="btn btn-primary" id="btn-empty-download">Download something</button>
   `;
-
-  div.querySelector("#btn-empty-download").addEventListener("click", () => {
-    showView("download");
-  });
-
+  div
+    .querySelector("#btn-empty-download")
+    .addEventListener("click", () => showView("download"));
   return div;
 }
 
@@ -208,38 +155,33 @@ async function buildSeriesCard(series) {
     ? `<img class="series-cover" src="file:///${series.coverPath.replace(/\\/g, "/")}" alt="${esc(series.title)}" loading="lazy" />`
     : `<div class="series-cover-placeholder">◈</div>`;
 
-  // Check if this series has a last read position
   const lastRead = await getLastReadPosition(series.title);
-  const progress = await getSeriesProgress(series.title);
+  const progress = await getSeriesProgress(series);
 
   card.innerHTML = `
     <div class="series-cover-wrap">
       ${coverHtml}
       <span class="series-card-badge">${series.chapters?.length ?? 0} ch</span>
       ${lastRead ? '<div class="series-card-continue-badge">Continue</div>' : ""}
-      <div class="series-card-progress" style="display: ${progress > 0 ? "block" : "none"}">
-        <div class="series-card-progress-fill" style="width: ${progress}%"></div>
+      <div class="series-card-progress" style="display:${progress > 0 ? "block" : "none"}">
+        <div class="series-card-progress-fill" style="width:${progress}%"></div>
       </div>
     </div>
     <div class="series-card-title">${esc(series.title)}</div>
     <div class="series-card-meta">${esc(series.author || "")}</div>
   `;
 
-  // Main click opens the series detail
   card.addEventListener("click", (e) => {
-    // Don't trigger if clicking on the continue badge
     if (e.target.classList.contains("series-card-continue-badge")) return;
     openSeries(series);
   });
 
-  // Continue badge click handler
-  const continueBadge = card.querySelector(".series-card-continue-badge");
-  if (continueBadge) {
-    continueBadge.addEventListener("click", (e) => {
+  card
+    .querySelector(".series-card-continue-badge")
+    ?.addEventListener("click", (e) => {
       e.stopPropagation();
       continueReading(series);
     });
-  }
 
   return card;
 }
@@ -257,14 +199,11 @@ async function openSeries(series) {
     : `<div class="detail-cover-placeholder">◈</div>`;
 
   const tags = [series.genre, series.status].filter(Boolean);
-
-  // Check if there's a last read position
   const lastRead = await getLastReadPosition(series.title);
   const lastReadChapter = lastRead
     ? series.chapters?.find((ch) => ch.number == lastRead.chapterNumber)
     : null;
 
-  // Build chapter rows with reading progress indicators
   const chapterRowsHtml = await buildChapterRows(series, lastRead);
 
   container.innerHTML = `
@@ -287,8 +226,7 @@ async function openSeries(series) {
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:15px;height:15px"><circle cx="12" cy="12" r="10"/><polygon points="10 8 16 12 10 16 10 8"/></svg>
             Continue Reading
             ${lastReadChapter ? `<span class="last-read-indicator">Ch. ${lastRead.chapterNumber}</span>` : ""}
-          </button>
-          `
+          </button>`
               : ""
           }
           <button class="btn btn-ghost" id="btn-series-download">
@@ -307,33 +245,28 @@ async function openSeries(series) {
     </div>
   `;
 
-  // Wire up chapter clicks
   container.querySelectorAll(".chapter-row").forEach((row) => {
     row.addEventListener("click", () => {
-      const chIdx = parseInt(row.dataset.chapterIndex);
-      openChapter(series, series.chapters[chIdx]);
+      openChapter(series, series.chapters[parseInt(row.dataset.chapterIndex)]);
     });
   });
 
-  // Read button → open first chapter
   container.querySelector("#btn-read-first")?.addEventListener("click", () => {
     if (series.chapters?.length) openChapter(series, series.chapters[0]);
   });
 
-  // Continue reading button
-  const continueBtn = container.querySelector("#btn-continue-reading");
-  if (continueBtn) {
-    continueBtn.addEventListener("click", () => continueReading(series));
-  }
+  container
+    .querySelector("#btn-continue-reading")
+    ?.addEventListener("click", () => {
+      continueReading(series);
+    });
 
-  // Download more button
   container
     .querySelector("#btn-series-download")
     ?.addEventListener("click", () => {
       document.getElementById("download-url").value =
         series.metadata?.url ?? "";
       showView("download");
-      // Switch nav highlight
       document
         .querySelectorAll(".nav-link")
         .forEach((a) => a.classList.remove("active"));
@@ -347,7 +280,6 @@ async function buildChapterRows(series, lastRead = null) {
   if (!series.chapters?.length)
     return "<p class='muted' style='padding:20px'>No chapters downloaded.</p>";
 
-  // Fetch ALL progress keys in parallel
   const progressResults = await Promise.all(
     series.chapters.map((ch) =>
       window.strip.progress.get(`${series.title}/${ch.number}`).catch(() => 0),
@@ -375,22 +307,17 @@ async function buildChapterRows(series, lastRead = null) {
 // ──────────────────────────────────────────────────────────────────
 //  Reader
 // ──────────────────────────────────────────────────────────────────
-// Helper to enable/disable chapter navigation buttons
 function updateChapterNavButtons() {
-  const series = state.currentSeries;
-  const chapter = state.currentChapter;
+  const { currentSeries: series, currentChapter: chapter } = state;
   if (!series || !chapter) return;
 
   const idx = series.chapters.findIndex((c) => c.number === chapter.number);
-  const prevBtn = document.getElementById("btn-prev-chapter");
-  const nextBtn = document.getElementById("btn-next-chapter");
-  const endPrevBtn = document.getElementById("btn-end-prev-chapter");
-  const endNextBtn = document.getElementById("btn-end-next-chapter");
-
-  if (prevBtn) prevBtn.disabled = idx <= 0;
-  if (nextBtn) nextBtn.disabled = idx >= series.chapters.length - 1;
-  if (endPrevBtn) endPrevBtn.disabled = idx <= 0;
-  if (endNextBtn) endNextBtn.disabled = idx >= series.chapters.length - 1;
+  document.getElementById("btn-prev-chapter").disabled = idx <= 0;
+  document.getElementById("btn-next-chapter").disabled =
+    idx >= series.chapters.length - 1;
+  document.getElementById("btn-end-prev-chapter").disabled = idx <= 0;
+  document.getElementById("btn-end-next-chapter").disabled =
+    idx >= series.chapters.length - 1;
 }
 
 async function openChapter(series, chapter, scrollToPage = 0) {
@@ -398,21 +325,25 @@ async function openChapter(series, chapter, scrollToPage = 0) {
   state.currentChapter = chapter;
   state.currentPageIndex = 0;
 
-  const toolbar = document.getElementById("reader-toolbar");
   const pagesEl = document.getElementById("reader-pages");
   const titleEl = document.getElementById("reader-title");
   const pageInfo = document.getElementById("reader-page-info");
+  const overlay = document.getElementById("chapter-end-overlay");
 
   titleEl.textContent = `${series.title}  ·  Chapter ${chapter.number}`;
   pagesEl.innerHTML = "";
   pageInfo.textContent = "";
 
-  showView("reader");
+  // Reset overlay — class toggle only, no display change
+  overlay.classList.remove("is-visible");
+  overlay.setAttribute("aria-hidden", "true");
 
-  // Update button states
+  showView("reader");
   updateChapterNavButtons();
 
-  // Load pages
+  // Update end-of-chapter card text and button states
+  setupChapterEndOverlay(series, chapter);
+
   let pages = [];
   try {
     pages = await window.strip.chapter.pages(chapter.directory);
@@ -428,7 +359,6 @@ async function openChapter(series, chapter, scrollToPage = 0) {
     return;
   }
 
-  // Restore progress (if not overridden by scrollToPage)
   const progressKey = `${series.title}/${chapter.number}`;
   let startPage = 0;
   try {
@@ -438,7 +368,6 @@ async function openChapter(series, chapter, scrollToPage = 0) {
         : await window.strip.progress.get(progressKey);
   } catch (_) {}
 
-  // Build image elements
   pages.forEach((filePath, i) => {
     const wrapper = document.createElement("div");
     wrapper.style.width = "100%";
@@ -450,8 +379,6 @@ async function openChapter(series, chapter, scrollToPage = 0) {
 
     const img = document.createElement("img");
     img.className = "reader-page-img";
-    // Windows paths use backslashes — file:// URLs require forward slashes
-    const fileUrl = "file:///" + filePath.replace(/\\/g, "/");
     img.alt = `Page ${i + 1}`;
     img.style.display = "none";
 
@@ -467,37 +394,30 @@ async function openChapter(series, chapter, scrollToPage = 0) {
       wrapper.appendChild(err);
     };
 
-    // Set src immediately
-    img.src = fileUrl;
-
+    img.src = "file:///" + filePath.replace(/\\/g, "/");
     wrapper.appendChild(img);
     pagesEl.appendChild(wrapper);
   });
 
   pageInfo.textContent = `${pages.length} pages`;
 
-  // Scroll to saved progress
   if (startPage > 0 && startPage < pages.length) {
     setTimeout(() => {
       const imgs = pagesEl.querySelectorAll("img");
-      if (imgs[startPage]) {
-        imgs[startPage].closest("div")?.scrollIntoView({ behavior: "smooth" });
-      }
+      imgs[startPage]?.closest("div")?.scrollIntoView({ behavior: "smooth" });
     }, 200);
   }
 
-  // Save progress on scroll
   const container = document.getElementById("reader-container");
   let saveTimer = null;
 
-  // Remove old listener if exists
-  const oldListener = container._scrollListener;
-  if (oldListener) {
-    container.removeEventListener("scroll", oldListener);
+  // Remove previous chapter's listener before attaching a new one
+  if (container._scrollListener) {
+    container.removeEventListener("scroll", container._scrollListener);
   }
 
   const scrollListener = () => {
-    // Find which image is most visible
+    // ── Page counter ───────────────────────────────────────────────
     const imgs = pagesEl.querySelectorAll("img");
     let visibleIdx = 0;
     imgs.forEach((img, i) => {
@@ -506,11 +426,10 @@ async function openChapter(series, chapter, scrollToPage = 0) {
     });
     pageInfo.textContent = `${visibleIdx + 1} / ${pages.length}`;
 
+    // ── Save progress (debounced) ──────────────────────────────────
     clearTimeout(saveTimer);
     saveTimer = setTimeout(() => {
-      // Save chapter progress
       window.strip.progress.set(progressKey, visibleIdx);
-      // Save last read position for the series
       updateLastReadPosition(
         series.title,
         chapter.number,
@@ -518,13 +437,25 @@ async function openChapter(series, chapter, scrollToPage = 0) {
         pages.length,
       );
     }, 500);
+
+    // ── End-of-chapter overlay ─────────────────────────────────────
+    // Hysteresis: show at <120px from bottom, hide only when scrolled
+    // back >180px. Class-toggle only — zero display changes, zero reflow.
+    const distFromBottom =
+      container.scrollHeight - container.scrollTop - container.clientHeight;
+    const isVisible = overlay.classList.contains("is-visible");
+
+    if (!isVisible && distFromBottom < 120) {
+      overlay.classList.add("is-visible");
+      overlay.setAttribute("aria-hidden", "false");
+    } else if (isVisible && distFromBottom > 180) {
+      overlay.classList.remove("is-visible");
+      overlay.setAttribute("aria-hidden", "true");
+    }
   };
 
   container._scrollListener = scrollListener;
   container.addEventListener("scroll", scrollListener, { passive: true });
-
-  // Update end-of-chapter overlay
-  setupChapterEndOverlay(series, chapter);
 }
 
 function setupChapterEndOverlay(series, chapter) {
@@ -535,39 +466,17 @@ function setupChapterEndOverlay(series, chapter) {
 
   endTitle.textContent = `${series.title} · Chapter ${chapter.number}`;
 
-  // Update button states
   const idx = series.chapters.findIndex((c) => c.number === chapter.number);
-  if (endPrevBtn) endPrevBtn.disabled = idx <= 0;
-  if (endNextBtn) endNextBtn.disabled = idx >= series.chapters.length - 1;
+  endPrevBtn.disabled = idx <= 0;
+  endNextBtn.disabled = idx >= series.chapters.length - 1;
 
-  // Show overlay when reaching bottom
-  const container = document.getElementById("reader-container");
-
-  const checkBottom = () => {
-    const scrollTop = container.scrollTop;
-    const scrollHeight = container.scrollHeight;
-    const clientHeight = container.clientHeight;
-
-    if (scrollHeight - scrollTop - clientHeight < 100) {
-      overlay.style.display = "flex";
-    } else {
-      overlay.style.display = "none";
-    }
-  };
-
-  // Remove old listener
-  const oldBottomCheck = container._bottomCheck;
-  if (oldBottomCheck) {
-    container.removeEventListener("scroll", oldBottomCheck);
-  }
-
-  container._bottomCheck = checkBottom;
-  container.addEventListener("scroll", checkBottom, { passive: true });
+  // Always hidden when a chapter first loads — scroll listener shows it
+  overlay.classList.remove("is-visible");
+  overlay.setAttribute("aria-hidden", "true");
 }
 
 function goBackFromReader() {
   if (state.currentSeries) {
-    // Refresh the series detail view to show updated progress
     openSeries(state.currentSeries);
   } else {
     showView("library");
@@ -617,32 +526,26 @@ async function startDownload() {
       case "series_info":
         seriesTitle.textContent = data.title ?? "—";
         break;
-
-      case "chapter_progress":
+      case "chapter_progress": {
         chapterInfo.textContent = `Chapter ${data.chapter_number}: ${esc(data.chapter_title ?? "")}  (${data.current}/${data.total})`;
-        // Use overall chapter progress as bar
         const overall = Math.round((data.current / data.total) * 100);
         fillEl.style.width = overall + "%";
         pctEl.textContent = overall + "%";
         break;
-
+      }
       case "progress":
-        // Per-page progress within current chapter
         fillEl.style.width = data.percent + "%";
         pctEl.textContent = data.percent + "%";
         break;
-
       case "chapter_done":
         addLog(
           logEl,
           `✓ Chapter ${data.chapter} downloaded (${data.pages_saved} pages)`,
         );
         break;
-
       case "skipped":
         addLog(logEl, `– Chapter ${data.chapter} skipped (already downloaded)`);
         break;
-
       case "done":
         seriesTitle.textContent = data.series ?? seriesTitle.textContent;
         chapterInfo.textContent = "Download complete!";
@@ -650,14 +553,11 @@ async function startDownload() {
         pctEl.textContent = "100%";
         addLog(logEl, `✓ Saved to ${data.directory}`);
         state.activeDownloadId = null;
-        // Auto-refresh library after 1s
         setTimeout(() => loadLibrary(), 1000);
         break;
-
       case "error":
         addLog(logEl, `✗ ${data.message}`, "error");
         break;
-
       case "process_exit":
         if (data.code !== 0 && state.activeDownloadId) {
           addLog(logEl, `Process exited with code ${data.code}`, "error");
@@ -665,7 +565,6 @@ async function startDownload() {
         }
         window.strip.download.offProgress();
         break;
-
       case "log":
         addLog(logEl, data.message);
         break;
@@ -686,10 +585,8 @@ function addLog(el, msg, type = "info") {
 // ──────────────────────────────────────────────────────────────────
 async function loadSettings() {
   state.config = await window.strip.config.get();
-
   const dirEl = document.getElementById("setting-download-dir");
   const themeEl = document.getElementById("setting-theme");
-
   if (dirEl) dirEl.textContent = state.config.downloadDir ?? "~";
   if (themeEl) themeEl.value = state.config.theme ?? "system";
 }
@@ -698,17 +595,17 @@ async function loadSettings() {
 //  Theme
 // ──────────────────────────────────────────────────────────────────
 function applyTheme(theme) {
-  const body = document.body;
   if (theme === "dark") {
-    body.setAttribute("data-theme", "dark");
+    document.body.setAttribute("data-theme", "dark");
   } else if (theme === "light") {
-    body.setAttribute("data-theme", "light");
+    document.body.setAttribute("data-theme", "light");
   } else {
-    // system
-    const prefersDark = window.matchMedia(
-      "(prefers-color-scheme: dark)",
-    ).matches;
-    body.setAttribute("data-theme", prefersDark ? "dark" : "light");
+    document.body.setAttribute(
+      "data-theme",
+      window.matchMedia("(prefers-color-scheme: dark)").matches
+        ? "dark"
+        : "light",
+    );
   }
 }
 
@@ -716,13 +613,11 @@ function applyTheme(theme) {
 //  Bootstrap
 // ──────────────────────────────────────────────────────────────────
 async function init() {
-  // Load config first
   try {
     state.config = await window.strip.config.get();
     applyTheme(state.config.theme ?? "system");
   } catch (_) {}
 
-  // Nav links
   document.querySelectorAll(".nav-link").forEach((link) => {
     link.addEventListener("click", (e) => {
       e.preventDefault();
@@ -733,7 +628,6 @@ async function init() {
     });
   });
 
-  // Library actions
   document
     .getElementById("btn-refresh-library")
     ?.addEventListener("click", loadLibrary);
@@ -741,7 +635,6 @@ async function init() {
     .getElementById("btn-add-download")
     ?.addEventListener("click", () => showView("download"));
 
-  // Back buttons
   document.getElementById("btn-back-library")?.addEventListener("click", () => {
     showView("library");
     document
@@ -749,11 +642,11 @@ async function init() {
       .forEach((a) => a.classList.remove("active"));
     document.querySelector('[data-view="library"]')?.classList.add("active");
   });
+
   document
     .getElementById("btn-back-series")
     ?.addEventListener("click", goBackFromReader);
 
-  // Chapter navigation buttons
   document.getElementById("btn-prev-chapter")?.addEventListener("click", () => {
     const idx = state.currentSeries?.chapters.findIndex(
       (c) => c.number === state.currentChapter?.number,
@@ -794,10 +687,10 @@ async function init() {
     .getElementById("btn-end-back")
     ?.addEventListener("click", goBackFromReader);
 
-  // Download
   document
     .getElementById("btn-start-download")
     ?.addEventListener("click", startDownload);
+
   document
     .getElementById("btn-cancel-download")
     ?.addEventListener("click", async () => {
@@ -808,16 +701,14 @@ async function init() {
       }
     });
 
-  // Theme toggle
   document.getElementById("theme-toggle")?.addEventListener("click", () => {
-    const current = document.body.getAttribute("data-theme");
-    const next = current === "dark" ? "light" : "dark";
+    const next =
+      document.body.getAttribute("data-theme") === "dark" ? "light" : "dark";
     applyTheme(next);
     window.strip.theme.set(next);
     state.config.theme = next;
   });
 
-  // Settings: folder picker
   document
     .getElementById("btn-change-folder")
     ?.addEventListener("click", async () => {
@@ -829,7 +720,6 @@ async function init() {
       }
     });
 
-  // Settings: theme select
   document
     .getElementById("setting-theme")
     ?.addEventListener("change", async (e) => {
@@ -839,49 +729,38 @@ async function init() {
       await window.strip.config.set({ theme });
     });
 
-  // Global keyboard shortcuts (reader only)
   document.addEventListener("keydown", (e) => {
     if (state.currentView !== "reader") return;
-
-    // Ignore if user is typing in an input (none in reader, but safe)
     if (e.target.tagName === "INPUT" || e.target.tagName === "TEXTAREA") return;
 
     const key = e.key.toLowerCase();
 
-    // Escape → back to series list
     if (key === "escape") {
       e.preventDefault();
       goBackFromReader();
       return;
     }
-
-    // n / p → next / previous chapter
     if (key === "n") {
       e.preventDefault();
       const idx = state.currentSeries?.chapters.findIndex(
         (c) => c.number === state.currentChapter?.number,
       );
-      if (idx !== -1 && idx < state.currentSeries.chapters.length - 1) {
+      if (idx !== -1 && idx < state.currentSeries.chapters.length - 1)
         openChapter(state.currentSeries, state.currentSeries.chapters[idx + 1]);
-      }
       return;
     }
-
     if (key === "p") {
       e.preventDefault();
       const idx = state.currentSeries?.chapters.findIndex(
         (c) => c.number === state.currentChapter?.number,
       );
-      if (idx > 0) {
+      if (idx > 0)
         openChapter(state.currentSeries, state.currentSeries.chapters[idx - 1]);
-      }
       return;
     }
 
-    // Arrow keys for scrolling
     const container = document.getElementById("reader-container");
     if (!container) return;
-
     if (key === "arrowdown" || key === "arrowright") {
       e.preventDefault();
       container.scrollBy({
@@ -897,7 +776,6 @@ async function init() {
     }
   });
 
-  // Initial load
   await loadLibrary();
 }
 
@@ -913,7 +791,4 @@ function esc(str) {
     .replace(/"/g, "&quot;");
 }
 
-// ──────────────────────────────────────────────────────────────────
-//  Run
-// ──────────────────────────────────────────────────────────────────
 document.addEventListener("DOMContentLoaded", init);
