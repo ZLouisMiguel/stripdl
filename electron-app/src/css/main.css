@@ -1,8 +1,7 @@
-/* electron-app/src/css/main.css
-   Design system for Strip reader.
-   Palette anchors: parchment #f5f1e6 · ocean-steel #6194b2
-   Typefaces: DM Serif Display (headings) · DM Sans (body)
-*/
+/* electron-app/src/css/main.css */
+/* Design system for Strip reader. */
+/* Palette anchors: parchment #f5f1e6 · ocean-steel #6194b2 */
+/* Typefaces: DM Serif Display (headings) · DM Sans (body) */
 
 /* ── Tokens ─────────────────────────────────────────────── */
 :root {
@@ -654,37 +653,41 @@ body {
   display: grid;
   grid-template-columns: auto 1fr auto;
   align-items: center;
-  padding: 0 12px;
-  gap: 8px;
+  padding: 0 16px;
+  gap: 16px;
   z-index: 100;
   backdrop-filter: blur(8px);
   -webkit-backdrop-filter: blur(8px);
 }
 
-/* Center column: prev ← title → next */
+/* Center column: prev ← title → next - made wider */
 .reader-chapter-nav {
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 6px;
+  gap: 12px;
   min-width: 0;
+  max-width: 800px;
+  margin: 0 auto;
+  width: 100%;
 }
 
 .reader-title-text {
-  font-size: 13.5px;
+  font-size: 14px;
   font-weight: 500;
   color: var(--text-secondary);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  max-width: 420px;
+  max-width: 600px;
   text-align: center;
+  padding: 0 8px;
 }
 
 .reader-controls {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 12px;
   color: var(--text-muted);
   font-size: 13px;
   white-space: nowrap;
@@ -706,23 +709,27 @@ body {
   overflow-x: hidden;
   background: var(--bg);
   scroll-behavior: smooth;
+  scrollbar-width: thin;
+  scrollbar-color: var(--border) transparent;
 }
 
-/* Standard webcomic reading layout: centered column, comfortable max-width */
+/* Standard webcomic reading layout: centered column, wider max-width */
 #reader-pages {
   display: flex;
   flex-direction: column;
   align-items: center;
   gap: 0;
-  max-width: 800px;
+  max-width: 1000px; /* Increased from 800px */
   margin: 0 auto;
-  padding: 20px 0 60px;
+  padding: 20px 0 80px; /* Increased bottom padding for overlay */
 }
 
 .reader-page-img {
   width: 100%;
   display: block;
   line-height: 0;
+  background: var(--bg-surface);
+  border-radius: var(--r-sm);
 }
 
 .reader-page-loading {
@@ -736,6 +743,7 @@ body {
   );
   background-size: 200% 100%;
   animation: shimmer 1.5s infinite;
+  border-radius: var(--r-sm);
 }
 
 .reader-page-error {
@@ -748,6 +756,7 @@ body {
   color: var(--text-muted);
   font-size: 13px;
   border: 1px dashed var(--border);
+  border-radius: var(--r-sm);
 }
 
 /* ── Download view ───────────────────────────────────────── */
@@ -976,46 +985,63 @@ body {
 
 /* ── End-of-chapter overlay ──────────────────────────────── */
 #chapter-end-overlay {
-  padding: 40px 20px 80px;
+  padding: 60px 20px 100px; /* Increased padding */
   display: flex;
   justify-content: center;
+  opacity: 0;
+  transition: opacity 0.3s ease;
+}
+
+#chapter-end-overlay[style*="display: flex"] {
+  opacity: 1;
 }
 
 .chapter-end-card {
   background: var(--bg-raised);
   border: 1px solid var(--border);
   border-radius: var(--r-xl);
-  padding: 32px 40px;
+  padding: 40px 48px; /* Increased padding */
   text-align: center;
-  max-width: 420px;
+  max-width: 520px; /* Increased from 420px */
   width: 100%;
-  box-shadow: var(--shadow-md);
-  animation: fadeUp 0.3s ease both;
+  box-shadow: var(--shadow-lg);
+  animation: fadeUp 0.4s ease both;
 }
 
 .chapter-end-label {
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.08em;
   color: var(--steel);
-  margin-bottom: 8px;
+  margin-bottom: 12px;
 }
 
 .chapter-end-title {
   font-family: var(--font-display);
-  font-size: 18px;
+  font-size: 22px; /* Increased from 18px */
   color: var(--text);
-  margin-bottom: 24px;
-  line-height: 1.3;
+  margin-bottom: 28px; /* Increased from 24px */
+  line-height: 1.4;
 }
 
 .chapter-end-actions {
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 10px;
+  gap: 16px; /* Increased from 10px */
   flex-wrap: wrap;
+}
+
+.chapter-end-actions .btn {
+  padding: 10px 24px; /* Larger buttons */
+  font-size: 14px;
+  gap: 10px;
+}
+
+.chapter-end-actions .btn svg {
+  width: 16px;
+  height: 16px;
 }
 
 #btn-end-prev-chapter:disabled,
@@ -1027,8 +1053,8 @@ body {
 
 /* ── Scrollbar ───────────────────────────────────────────── */
 ::-webkit-scrollbar {
-  width: 6px;
-  height: 6px;
+  width: 8px;
+  height: 8px;
 }
 ::-webkit-scrollbar-track {
   background: transparent;
@@ -1139,7 +1165,7 @@ body {
   height: 12px;
 }
 
-/* Reading progress bar in series card (optional enhancement) */
+/* Reading progress bar in series card */
 .series-card-progress {
   position: absolute;
   bottom: 0;
