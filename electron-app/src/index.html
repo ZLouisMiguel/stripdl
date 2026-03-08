@@ -219,62 +219,64 @@
             <span id="reader-page-info"></span>
           </div>
         </div>
+
         <div id="reader-container">
           <div id="reader-pages"></div>
-          <!-- End of chapter overlay, shown when user scrolls to the bottom -->
-          <div id="chapter-end-overlay" style="display: none">
-            <div class="chapter-end-card">
-              <div class="chapter-end-label">End of chapter</div>
-              <div class="chapter-end-title" id="chapter-end-title"></div>
-              <div class="chapter-end-actions">
-                <button
-                  class="btn btn-ghost"
-                  id="btn-end-prev-chapter"
-                  disabled
+        </div>
+
+        <!--
+          Overlay lives OUTSIDE #reader-container.
+          Toggling .is-visible never touches scrollHeight,
+          so the scroll listener is never retriggered.
+        -->
+        <div id="chapter-end-overlay" aria-hidden="true">
+          <div class="chapter-end-card">
+            <div class="chapter-end-label">End of chapter</div>
+            <div class="chapter-end-title" id="chapter-end-title"></div>
+            <div class="chapter-end-actions">
+              <button class="btn btn-ghost" id="btn-end-prev-chapter" disabled>
+                <svg
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="2"
+                  style="width: 15px; height: 15px"
                 >
-                  <svg
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="currentColor"
-                    stroke-width="2"
-                    style="width: 15px; height: 15px"
-                  >
-                    <polyline points="15 18 9 12 15 6" />
-                  </svg>
-                  Previous
-                </button>
-                <button class="btn btn-ghost" id="btn-end-back">
-                  <svg
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="currentColor"
-                    stroke-width="2"
-                    style="width: 15px; height: 15px"
-                  >
-                    <rect x="3" y="3" width="7" height="9" rx="1" />
-                    <rect x="14" y="3" width="7" height="5" rx="1" />
-                    <rect x="14" y="12" width="7" height="9" rx="1" />
-                    <rect x="3" y="16" width="7" height="5" rx="1" />
-                  </svg>
-                  Chapter list
-                </button>
-                <button
-                  class="btn btn-primary"
-                  id="btn-end-next-chapter"
-                  disabled
+                  <polyline points="15 18 9 12 15 6" />
+                </svg>
+                Previous
+              </button>
+              <button class="btn btn-ghost" id="btn-end-back">
+                <svg
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="2"
+                  style="width: 15px; height: 15px"
                 >
-                  Next chapter
-                  <svg
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="currentColor"
-                    stroke-width="2"
-                    style="width: 15px; height: 15px"
-                  >
-                    <polyline points="9 18 15 12 9 6" />
-                  </svg>
-                </button>
-              </div>
+                  <rect x="3" y="3" width="7" height="9" rx="1" />
+                  <rect x="14" y="3" width="7" height="5" rx="1" />
+                  <rect x="14" y="12" width="7" height="9" rx="1" />
+                  <rect x="3" y="16" width="7" height="5" rx="1" />
+                </svg>
+                Chapter list
+              </button>
+              <button
+                class="btn btn-primary"
+                id="btn-end-next-chapter"
+                disabled
+              >
+                Next chapter
+                <svg
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="2"
+                  style="width: 15px; height: 15px"
+                >
+                  <polyline points="9 18 15 12 9 6" />
+                </svg>
+              </button>
             </div>
           </div>
         </div>
@@ -319,7 +321,6 @@
             </div>
           </div>
 
-          <!-- Progress card (hidden until download starts) -->
           <div
             class="download-progress card"
             id="download-progress-card"
