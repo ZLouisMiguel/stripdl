@@ -5,7 +5,7 @@ long_description = (Path(__file__).parent / "README.md").read_text(encoding="utf
 
 setup(
     name="strip",
-    version="0.2.1",
+    version="0.3.0",
     description="Webtoon downloader and library manager",
     long_description=long_description,
     long_description_content_type="text/markdown",
@@ -25,9 +25,4 @@ setup(
             "stripdl=strip.cli:main",
         ],
     },
-    classifiers=[
-        "Programming Language :: Python :: 3",
-        "License :: OSI Approved :: MIT License",
-        "Operating System :: OS Independent",
-    ],
 )
