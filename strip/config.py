@@ -39,6 +39,8 @@ class Config:
         self._data: dict = {}
         self._load()
 
+    # ------------------------------------------------------------------ I/O
+
     def _load(self):
         if _CONFIG_FILE.exists():
             try:
@@ -46,6 +48,7 @@ class Config:
                     self._data = json.load(f)
             except json.JSONDecodeError:
                 self._data = {}
+        # Fill in any missing keys from defaults
         for k, v in _DEFAULTS.items():
             self._data.setdefault(k, v)
 
@@ -53,6 +56,8 @@ class Config:
         _CONFIG_DIR.mkdir(parents=True, exist_ok=True)
         with open(_CONFIG_FILE, "w") as f:
             json.dump(self._data, f, indent=2)
+
+    # ------------------------------------------------------------------ access
 
     def __getitem__(self, key: str) -> Any:
         return self._data[key]
@@ -66,6 +71,8 @@ class Config:
     def all(self) -> dict:
         return dict(self._data)
 
+    # ------------------------------------------------------------------ helpers
+
     @property
     def download_dir(self) -> Path:
         return Path(self._data["download_dir"])
@@ -76,4 +83,5 @@ class Config:
         return p
 
 
+# Module-level singleton – import this everywhere
 config = Config()
