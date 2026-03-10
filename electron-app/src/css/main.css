@@ -1360,3 +1360,279 @@ body {
   width: 0%;
   transition: width 0.3s ease;
 }
+
+/* ═══════════════════════════════════════════════════════════════
+   v2 additions
+   ═══════════════════════════════════════════════════════════════ */
+
+/* ── Toast notifications ─────────────────────────────────────── */
+
+.toast-container {
+  position: fixed;
+  top: 16px;
+  right: 16px;
+  z-index: 9999;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  pointer-events: none;
+}
+
+.toast {
+  pointer-events: all;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  border-radius: 8px;
+  font-size: 13px;
+  font-family: var(--font-body);
+  box-shadow: 0 4px 18px rgba(0, 0, 0, 0.18);
+  opacity: 0;
+  transform: translateX(30px);
+  transition:
+    opacity 0.25s,
+    transform 0.25s;
+  min-width: 240px;
+  max-width: 380px;
+}
+
+.toast-show {
+  opacity: 1;
+  transform: translateX(0);
+}
+.toast-hide {
+  opacity: 0;
+  transform: translateX(30px);
+}
+
+.toast-info {
+  background: var(--surface-2, #fff);
+  color: var(--text);
+  border: 1px solid var(--border);
+}
+.toast-success {
+  background: #d4edda;
+  color: #155724;
+  border: 1px solid #c3e6cb;
+}
+.toast-error {
+  background: #f8d7da;
+  color: #721c24;
+  border: 1px solid #f5c6cb;
+}
+.toast-warning {
+  background: #fff3cd;
+  color: #856404;
+  border: 1px solid #ffeeba;
+}
+
+[data-theme="dark"] .toast-info {
+  background: #2a2a2a;
+  border-color: #444;
+  color: var(--text);
+}
+
+.toast-msg {
+  flex: 1;
+}
+.toast-close {
+  background: none;
+  border: none;
+  cursor: pointer;
+  color: inherit;
+  opacity: 0.6;
+  font-size: 16px;
+  line-height: 1;
+  padding: 0 2px;
+}
+.toast-close:hover {
+  opacity: 1;
+}
+
+/* ── Search bar ──────────────────────────────────────────────── */
+
+.search-wrap {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.search-icon {
+  position: absolute;
+  left: 8px;
+  width: 14px;
+  height: 14px;
+  color: var(--text-muted);
+  pointer-events: none;
+}
+
+.search-input {
+  padding-left: 30px;
+  width: 180px;
+  height: 32px;
+  font-size: 13px;
+}
+
+.sort-select {
+  height: 32px;
+  font-size: 13px;
+  padding: 0 8px;
+}
+
+/* ── Settings — number inputs and toggles ────────────────────── */
+
+.setting-num {
+  width: 72px;
+  text-align: right;
+  height: 32px;
+  font-size: 13px;
+}
+
+.setting-desc {
+  font-size: 11px;
+  margin-top: 2px;
+}
+
+/* Toggle switch */
+.toggle {
+  position: relative;
+  display: inline-block;
+  width: 40px;
+  height: 22px;
+  flex-shrink: 0;
+}
+
+.toggle input {
+  opacity: 0;
+  width: 0;
+  height: 0;
+}
+
+.toggle-slider {
+  position: absolute;
+  cursor: pointer;
+  inset: 0;
+  background: var(--border);
+  border-radius: 22px;
+  transition: background 0.2s;
+}
+
+.toggle-slider::before {
+  content: "";
+  position: absolute;
+  height: 16px;
+  width: 16px;
+  left: 3px;
+  bottom: 3px;
+  background: white;
+  border-radius: 50%;
+  transition: transform 0.2s;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
+}
+
+.toggle input:checked + .toggle-slider {
+  background: var(--accent);
+}
+.toggle input:checked + .toggle-slider::before {
+  transform: translateX(18px);
+}
+
+/* ── Download tray — concurrent chapter rows ─────────────────── */
+
+.tray-job-title-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+}
+
+.tray-job-expand-btn {
+  margin-left: auto;
+  opacity: 0.5;
+}
+.tray-job-expand-btn:hover {
+  opacity: 1;
+}
+
+.tray-chapters-list {
+  padding: 4px 0 4px 8px;
+  border-left: 2px solid var(--border);
+  margin: 4px 0 4px 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  max-height: 200px;
+  overflow-y: auto;
+}
+
+.tray-ch-row {
+  display: grid;
+  grid-template-columns: auto 1fr auto auto;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.tray-ch-label {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 140px;
+  color: var(--text);
+}
+
+.tray-ch-bar {
+  height: 4px;
+  background: var(--border);
+  border-radius: 2px;
+  overflow: hidden;
+}
+
+.tray-ch-fill {
+  height: 100%;
+  background: var(--accent);
+  border-radius: 2px;
+  transition: width 0.3s;
+}
+
+.tray-ch-pct {
+  font-size: 10px;
+  width: 28px;
+  text-align: right;
+}
+.tray-ch-status {
+  font-size: 10px;
+  min-width: 16px;
+  text-align: center;
+}
+
+/* Queued job styling */
+.tray-job-queued {
+  opacity: 0.65;
+}
+
+.status-queued {
+  background: var(--border) !important;
+  color: var(--text-muted) !important;
+}
+
+/* ── Chapter row right-click visual feedback ─────────────────── */
+
+.chapter-row {
+  cursor: pointer;
+  user-select: none;
+}
+
+.chapter-row:active {
+  opacity: 0.7;
+}
+
+/* ── Lazy-loading shimmer placeholder (reader) ────────────────── */
+
+/* The existing .reader-page-loading shimmer is already defined in the
+   base CSS; this ensures it has a minimum height for lazy slots. */
+.reader-page-loading {
+  min-height: 400px;
+}
