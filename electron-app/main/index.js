@@ -1,7 +1,14 @@
 // electron-app/main/index.js
 // Main process: creates windows, handles IPC, spawns Python CLI subprocess.
 
-const { app, BrowserWindow, ipcMain, dialog, shell, nativeTheme } = require("electron");
+const {
+  app,
+  BrowserWindow,
+  ipcMain,
+  dialog,
+  shell,
+  nativeTheme,
+} = require("electron");
 const path = require("path");
 const fs = require("fs");
 const { spawn } = require("child_process");
@@ -9,7 +16,7 @@ const { spawn } = require("child_process");
 const isDev = process.argv.includes("--dev");
 
 // ──────────────────────────────────────────────────────────────────
-//  Config persistence (separate from Python config)
+//  Config persistence
 // ──────────────────────────────────────────────────────────────────
 
 const CONFIG_PATH = path.join(app.getPath("userData"), "config.json");
@@ -23,7 +30,7 @@ function loadConfig() {
   return {
     downloadDir: path.join(app.getPath("home"), "strip-data"),
     theme: "system",
-    readingProgress: {},  // { "SeriesName/chapter": lastPageIndex }
+    readingProgress: {},
   };
 }
 
@@ -51,7 +58,6 @@ function createMainWindow() {
       preload: path.join(__dirname, "preload.js"),
       contextIsolation: true,
       nodeIntegration: false,
-      // Allow loading local images from the download directory
       webSecurity: false,
     },
   });
@@ -84,14 +90,15 @@ app.on("window-all-closed", () => {
 
 function getStripCliPath() {
   if (app.isPackaged) {
-    // Bundled via electron-builder extraResources
     const bundled = path.join(process.resourcesPath, "strip-cli", "strip");
     if (fs.existsSync(bundled)) return bundled;
-    // Windows
-    const bundledWin = path.join(process.resourcesPath, "strip-cli", "strip.exe");
+    const bundledWin = path.join(
+      process.resourcesPath,
+      "strip-cli",
+      "strip.exe",
+    );
     if (fs.existsSync(bundledWin)) return bundledWin;
   }
-  // Development: use system `strip` command
   return "stripdl";
 }
 
@@ -124,7 +131,9 @@ ipcMain.handle("library:scan", () => {
     if (!fs.existsSync(metaPath)) continue;
 
     let meta = {};
-    try { meta = JSON.parse(fs.readFileSync(metaPath, "utf8")); } catch (_) {}
+    try {
+      meta = JSON.parse(fs.readFileSync(metaPath, "utf8"));
+    } catch (_) {}
 
     const coverPath = path.join(seriesDir, "cover.jpg");
     const chapters = [];
@@ -133,9 +142,16 @@ ipcMain.handle("library:scan", () => {
       if (!ch.isDirectory() || !/^\d+$/.test(ch.name)) continue;
       const chDir = path.join(seriesDir, ch.name);
       const chMeta = path.join(chDir, "metadata.json");
-      let chData = { number: parseInt(ch.name), title: `Chapter ${parseInt(ch.name)}` };
-      try { chData = { ...chData, ...JSON.parse(fs.readFileSync(chMeta, "utf8")) }; } catch (_) {}
-      const pages = fs.readdirSync(chDir).filter(f => f.endsWith(".jpg") && f !== "cover.jpg").length;
+      let chData = {
+        number: parseInt(ch.name),
+        title: `Chapter ${parseInt(ch.name)}`,
+      };
+      try {
+        chData = { ...chData, ...JSON.parse(fs.readFileSync(chMeta, "utf8")) };
+      } catch (_) {}
+      const pages = fs
+        .readdirSync(chDir)
+        .filter((f) => f.endsWith(".jpg") && f !== "cover.jpg").length;
       chapters.push({ ...chData, directory: chDir, pageCount: pages });
     }
 
@@ -158,9 +174,9 @@ ipcMain.handle("chapter:pages", (_, chapterDir) => {
   if (!fs.existsSync(chapterDir)) return [];
   return fs
     .readdirSync(chapterDir)
-    .filter(f => f.endsWith(".jpg") && !f.startsWith("cover"))
+    .filter((f) => f.endsWith(".jpg") && !f.startsWith("cover"))
     .sort()
-    .map(f => path.join(chapterDir, f));
+    .map((f) => path.join(chapterDir, f));
 });
 
 // ---- Reading progress
@@ -176,9 +192,12 @@ ipcMain.handle("progress:set", (_, key, pageIndex) => {
   return true;
 });
 
-// ---- Download (spawn Python CLI)
+// ---- Downloads
+//
+// Multiple downloads can run simultaneously. Each gets a unique downloadId.
+// Progress events are pushed to the renderer regardless of which view is active —
+// the download tray in the renderer handles routing them to the right job entry.
 
-// Track active downloads so we can cancel
 const activeDownloads = new Map();
 
 ipcMain.handle("download:start", (event, { url, chapters, downloadDir }) => {
@@ -191,50 +210,36 @@ ipcMain.handle("download:start", (event, { url, chapters, downloadDir }) => {
     env: { ...process.env },
   });
 
-  const downloadId = Date.now().toString();
+  const downloadId = `dl_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
   activeDownloads.set(downloadId, child);
+
+  const send = (payload) => {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send("download:progress", {
+        downloadId,
+        ...payload,
+      });
+    }
+  };
 
   child.stdout.on("data", (data) => {
     const lines = data.toString().split("\n").filter(Boolean);
     for (const line of lines) {
       try {
-        const parsed = JSON.parse(line);
-        // Forward progress events to renderer
-        if (mainWindow && !mainWindow.isDestroyed()) {
-          mainWindow.webContents.send("download:progress", { downloadId, ...parsed });
-        }
+        send(JSON.parse(line));
       } catch (_) {
-        // Non-JSON line (e.g. tracebacks) – forward as raw message
-        if (mainWindow && !mainWindow.isDestroyed()) {
-          mainWindow.webContents.send("download:progress", {
-            downloadId,
-            status: "log",
-            message: line,
-          });
-        }
+        send({ status: "log", message: line });
       }
     }
   });
 
   child.stderr.on("data", (data) => {
-    if (mainWindow && !mainWindow.isDestroyed()) {
-      mainWindow.webContents.send("download:progress", {
-        downloadId,
-        status: "error",
-        message: data.toString(),
-      });
-    }
+    send({ status: "error", message: data.toString() });
   });
 
   child.on("close", (code) => {
     activeDownloads.delete(downloadId);
-    if (mainWindow && !mainWindow.isDestroyed()) {
-      mainWindow.webContents.send("download:progress", {
-        downloadId,
-        status: "process_exit",
-        code,
-      });
-    }
+    send({ status: "process_exit", code });
   });
 
   return downloadId;
@@ -250,6 +255,11 @@ ipcMain.handle("download:cancel", (_, downloadId) => {
   return false;
 });
 
+// Return list of currently active download IDs (for renderer reconnect after reload)
+ipcMain.handle("download:active", () => {
+  return [...activeDownloads.keys()];
+});
+
 // ---- Folder picker dialog
 
 ipcMain.handle("dialog:openFolder", async () => {
@@ -261,10 +271,12 @@ ipcMain.handle("dialog:openFolder", async () => {
 
 // ---- Theme
 
-ipcMain.handle("theme:get", () => nativeTheme.shouldUseDarkColors ? "dark" : "light");
+ipcMain.handle("theme:get", () =>
+  nativeTheme.shouldUseDarkColors ? "dark" : "light",
+);
 
 ipcMain.handle("theme:set", (_, theme) => {
-  nativeTheme.themeSource = theme; // "light" | "dark" | "system"
+  nativeTheme.themeSource = theme;
   appConfig.theme = theme;
   saveConfig(appConfig);
 });
