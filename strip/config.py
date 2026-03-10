@@ -16,12 +16,13 @@ _DEFAULTS: dict = {
     # Image quality for JPEG conversion (1-95)
     "image_quality": 85,
     # Maximum concurrent image downloads per chapter
+    # (keep moderate – too high triggers CDN rate-limits)
     "concurrent_downloads": 4,
-    # Maximum concurrent chapter downloads (each chapter still parallelises its images)
-    "concurrent_chapters": 3,
-    # Delay between chapter downloads (seconds) – be polite
-    "chapter_delay": 1.0,
+    # Seconds to wait between chapters – polite crawling and rate-limit avoidance.
+    # Increase if you encounter frequent 429 responses.
+    "chapter_delay": 1.5,
     # Whether to overwrite already-downloaded chapters
+    # (false = resume / skip completed chapters)
     "overwrite": False,
     # Theme preference for Electron app ("light" | "dark" | "system")
     "theme": "system",
@@ -38,8 +39,6 @@ class Config:
         self._data: dict = {}
         self._load()
 
-    # ------------------------------------------------------------------ I/O
-
     def _load(self):
         if _CONFIG_FILE.exists():
             try:
@@ -47,7 +46,6 @@ class Config:
                     self._data = json.load(f)
             except json.JSONDecodeError:
                 self._data = {}
-        # Fill in any missing keys from defaults
         for k, v in _DEFAULTS.items():
             self._data.setdefault(k, v)
 
@@ -55,8 +53,6 @@ class Config:
         _CONFIG_DIR.mkdir(parents=True, exist_ok=True)
         with open(_CONFIG_FILE, "w") as f:
             json.dump(self._data, f, indent=2)
-
-    # ------------------------------------------------------------------ access
 
     def __getitem__(self, key: str) -> Any:
         return self._data[key]
@@ -70,8 +66,6 @@ class Config:
     def all(self) -> dict:
         return dict(self._data)
 
-    # ------------------------------------------------------------------ helpers
-
     @property
     def download_dir(self) -> Path:
         return Path(self._data["download_dir"])
@@ -82,5 +76,4 @@ class Config:
         return p
 
 
-# Module-level singleton – import this everywhere
 config = Config()
