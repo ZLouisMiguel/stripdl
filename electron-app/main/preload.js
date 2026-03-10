@@ -31,11 +31,18 @@ contextBridge.exposeInMainWorld("strip", {
   download: {
     start: (opts) => ipcRenderer.invoke("download:start", opts),
     cancel: (id) => ipcRenderer.invoke("download:cancel", id),
+    active: () => ipcRenderer.invoke("download:active"),
+    // Register a listener for all progress events (persists across view changes)
     onProgress: (cb) => {
       ipcRenderer.on("download:progress", (_, data) => cb(data));
     },
-    offProgress: () => {
-      ipcRenderer.removeAllListeners("download:progress");
+    // Remove a specific named listener (pass the same function reference)
+    offProgress: (cb) => {
+      if (cb) {
+        ipcRenderer.removeListener("download:progress", cb);
+      } else {
+        ipcRenderer.removeAllListeners("download:progress");
+      }
     },
   },
 
