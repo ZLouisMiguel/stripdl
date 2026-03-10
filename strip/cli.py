@@ -4,6 +4,7 @@
 import json
 import sys
 import threading
+import time
 from pathlib import Path
 from typing import Optional
 
@@ -11,16 +12,11 @@ import click
 from rich.console import Console
 from rich.table import Table
 from rich.panel import Panel
-from rich.live import Live
-from rich.layout import Layout
-from rich.text import Text
 from rich.progress import (
     Progress, SpinnerColumn, BarColumn, TextColumn,
-    TimeRemainingColumn, DownloadColumn, TransferSpeedColumn,
-    TaskID
+    TaskID,
 )
 from rich import box
-from rich.columns import Columns
 
 from strip.config import config
 from strip.parsers import get_parser
@@ -29,13 +25,15 @@ from strip.library import scan_library
 
 console = Console()
 
+_VERSION = "0.2.0"
+
 
 # ────────────────────────────────────────────────────────────────────
 #  Root group
 # ────────────────────────────────────────────────────────────────────
 
 @click.group()
-@click.version_option("0.1.0", prog_name="stripdl")
+@click.version_option(_VERSION, prog_name="stripdl")
 def cli():
     """
     \b
@@ -52,6 +50,62 @@ def cli():
 
 
 # ────────────────────────────────────────────────────────────────────
+#  Watchdog: detects frozen progress
+# ────────────────────────────────────────────────────────────────────
+
+class _ProgressWatchdog:
+    """
+    Background daemon thread. If no progress update arrives for stall_secs,
+    marks every active task as 'waiting…' so the user knows it isn't frozen.
+    Clears automatically when progress resumes.
+    """
+
+    def __init__(self, progress: Progress, stall_secs: float = 20.0):
+        self._progress = progress
+        self._stall_secs = stall_secs
+        self._last_update = time.monotonic()
+        self._task_map: dict[float, TaskID] = {}
+        self._lock = threading.Lock()
+        self._stop = threading.Event()
+        self._thread = threading.Thread(target=self._run, daemon=True)
+
+    def start(self):
+        self._thread.start()
+
+    def stop(self):
+        self._stop.set()
+
+    def ping(self):
+        with self._lock:
+            self._last_update = time.monotonic()
+
+    def register(self, chapter_number: float, task_id: TaskID):
+        with self._lock:
+            self._task_map[chapter_number] = task_id
+
+    def unregister(self, chapter_number: float):
+        with self._lock:
+            self._task_map.pop(chapter_number, None)
+
+    def _run(self):
+        stalled = False
+        while not self._stop.wait(timeout=2.0):
+            with self._lock:
+                age = time.monotonic() - self._last_update
+                task_ids = list(self._task_map.values())
+
+            if age > self._stall_secs and task_ids and not stalled:
+                stalled = True
+                for tid in task_ids:
+                    try:
+                        self._progress.update(tid, status="[yellow]waiting…[/yellow]")
+                    except Exception:
+                        pass
+            elif age <= self._stall_secs and stalled:
+                stalled = False
+
+
+# ────────────────────────────────────────────────────────────────────
 #  download
 # ────────────────────────────────────────────────────────────────────
 
@@ -63,16 +117,31 @@ def cli():
               help="Emit JSON progress lines (Electron subprocess mode).")
 @click.option("--output", "-o", type=click.Path(),
               help="Override download directory for this run.")
-@click.option("--concurrent-chapters", default=None, type=int,
-              help="How many chapters to download at once (default: 3).")
-def download(url: str, chapters: Optional[str], json_progress: bool,
-             output: Optional[str], concurrent_chapters: Optional[int]):
-    """Download a webtoon series from URL."""
+@click.option("--concurrent-downloads", default=None, type=int,
+              help="Concurrent image downloads per chapter (default: 4).")
+@click.option("--chapter-delay", default=None, type=float,
+              help="Seconds to wait between chapters (default: 1.5).")
+def download(
+    url: str,
+    chapters: Optional[str],
+    json_progress: bool,
+    output: Optional[str],
+    concurrent_downloads: Optional[int],
+    chapter_delay: Optional[float],
+):
+    """Download a webtoon series from URL.
+
+    Resumes automatically from where it left off — already-completed
+    chapters are skipped. Two terminals cannot download the same series
+    at the same time (a lock file prevents it).
+    """
 
     if output:
         config["download_dir"] = output
-    if concurrent_chapters:
-        config["concurrent_chapters"] = concurrent_chapters
+    if concurrent_downloads:
+        config["concurrent_downloads"] = concurrent_downloads
+    if chapter_delay is not None:
+        config["chapter_delay"] = chapter_delay
 
     try:
         parser = get_parser(url)
@@ -83,7 +152,6 @@ def download(url: str, chapters: Optional[str], json_progress: bool,
             console.print(f"[red]Error:[/red] {e}")
         sys.exit(1)
 
-    # Parse chapter filter
     chapter_range = None
     specific_chapters = None
     if chapters:
@@ -103,103 +171,118 @@ def download(url: str, chapters: Optional[str], json_progress: bool,
 
     # ── Electron / JSON mode ─────────────────────────────────────────
     if json_progress:
-        download_series(
-            parser=parser, url=url,
-            chapter_range=chapter_range,
-            specific_chapters=specific_chapters,
-            json_progress=True,
-        )
+        try:
+            download_series(
+                parser=parser, url=url,
+                chapter_range=chapter_range,
+                specific_chapters=specific_chapters,
+                json_progress=True,
+            )
+        except RuntimeError as e:
+            print(json.dumps({"status": "error", "message": str(e)}), flush=True)
+            sys.exit(1)
         return
 
     # ── Interactive Rich CLI mode ────────────────────────────────────
     console.print(Panel.fit(
         f"[bold cyan]stripdl[/bold cyan] – [dim]{url}[/dim]",
-        border_style="cyan"
+        border_style="cyan",
     ))
 
-    # One Progress bar per active chapter, tracked by chapter number
     progress = Progress(
         SpinnerColumn(),
-        TextColumn("[bold]{task.description}"),
-        BarColumn(bar_width=30),
-        TextColumn("[cyan]{task.completed}[/cyan]/[white]{task.total}[/white] pages"),
-        TextColumn("[dim]{task.fields[status]}[/dim]"),
+        TextColumn("[bold]{task.description:<50}"),
+        BarColumn(bar_width=28),
+        TextColumn("[cyan]{task.completed}[/cyan]/[white]{task.total}[/white]"),
+        TextColumn(" {task.fields[status]}"),
         console=console,
         transient=False,
     )
 
-    # Overall task
-    overall_task: Optional[TaskID] = None
     chapter_tasks: dict[float, TaskID] = {}
+    overall_task: list[Optional[TaskID]] = [None]
     lock = threading.Lock()
-    series_title = [url]   # mutable box
+    watchdog = _ProgressWatchdog(progress, stall_secs=20.0)
 
     def on_progress(cp: ChapterProgress):
+        watchdog.ping()
         with lock:
+            ch = cp.chapter_number
+            label = f"Ch {int(ch):>4}  {cp.chapter_title[:38]}"
+
             if cp.status == "skipped":
-                # Show a brief skipped line but don't add a bar
-                if cp.chapter_number not in chapter_tasks:
-                    t = progress.add_task(
-                        f"Ch {int(cp.chapter_number):>4}  {cp.chapter_title[:40]}",
-                        total=cp.pages_total,
+                if ch not in chapter_tasks:
+                    tid = progress.add_task(
+                        label,
+                        total=max(cp.pages_total, 1),
                         completed=cp.pages_total,
                         status="[dim]skipped[/dim]",
                     )
-                    chapter_tasks[cp.chapter_number] = t
+                    chapter_tasks[ch] = tid
                 return
 
-            if cp.chapter_number not in chapter_tasks:
-                t = progress.add_task(
-                    f"Ch {int(cp.chapter_number):>4}  {cp.chapter_title[:40]}",
-                    total=cp.pages_total if cp.pages_total else 1,
+            if cp.status.startswith("rate_limited:"):
+                secs = cp.status.split(":")[1]
+                if ch in chapter_tasks:
+                    progress.update(
+                        chapter_tasks[ch],
+                        status=f"[yellow]rate-limited – waiting {secs}s[/yellow]",
+                    )
+                return
+
+            if ch not in chapter_tasks:
+                tid = progress.add_task(
+                    label,
+                    total=max(cp.pages_total, 1),
                     completed=0,
                     status="",
                 )
-                chapter_tasks[cp.chapter_number] = t
-            else:
-                t = chapter_tasks[cp.chapter_number]
+                chapter_tasks[ch] = tid
+                watchdog.register(ch, tid)
+
+            tid = chapter_tasks[ch]
 
             if cp.status == "done":
-                progress.update(t,
+                progress.update(
+                    tid,
                     completed=cp.pages_total,
-                    status="[green]✓ done[/green]")
-                # Update overall
-                if overall_task is not None:
-                    progress.advance(overall_task, 1)
+                    status="[green]✓ done[/green]",
+                )
+                watchdog.unregister(ch)
+                if overall_task[0] is not None:
+                    progress.advance(overall_task[0], 1)
+
             elif cp.status == "error":
-                progress.update(t, status="[red]✗ error[/red]")
+                progress.update(tid, status="[red]✗ error[/red]")
+                watchdog.unregister(ch)
+
             else:
-                progress.update(t,
+                progress.update(
+                    tid,
                     completed=cp.pages_done,
-                    total=cp.pages_total,
-                    status=f"[dim]{cp.pages_done}/{cp.pages_total}[/dim]")
+                    total=max(cp.pages_total, 1),
+                    status=f"[dim]{cp.pages_done}/{cp.pages_total}[/dim]",
+                )
 
     with progress:
-        # We don't know total chapters yet — add overall after fetch
-        fetch_task = progress.add_task("Fetching series info…", total=None, status="")
-
-        # Monkey-patch: capture series info from downloader output
-        original_emit = None
-        total_chapters_known = [False]
-
-        def _intercept_cb(cp: ChapterProgress):
-            on_progress(cp)
+        watchdog.start()
+        fetch_task = progress.add_task(
+            "Fetching series info…", total=1, completed=0, status="")
 
         try:
-            # First, get series info & chapter count separately so we can
-            # set up the overall bar before downloads start
             with console.status("[cyan]Fetching series info…[/cyan]", spinner="dots"):
                 series_info = parser.get_series_info(url)
-                series_title[0] = series_info.title
 
-            progress.update(fetch_task,
+            progress.update(
+                fetch_task,
                 description=f"[bold]{series_info.title}[/bold] by {series_info.author}",
-                total=1, completed=1, status="")
+                completed=1,
+                status="",
+            )
 
             with console.status("[cyan]Fetching chapter list…[/cyan]", spinner="dots"):
                 all_chapters = parser.get_chapter_list(url)
 
-            # Filter
             if specific_chapters:
                 to_dl = [c for c in all_chapters if int(c.number) in specific_chapters]
             elif chapter_range:
@@ -209,27 +292,20 @@ def download(url: str, chapters: Optional[str], json_progress: bool,
                 to_dl = all_chapters
 
             console.print(
-                f"  [cyan]◈[/cyan] [bold]{series_info.title}[/bold]  "
+                f"\n  [cyan]◈[/cyan] [bold]{series_info.title}[/bold]  "
                 f"[dim]{series_info.author}[/dim]\n"
                 f"  [dim]{len(all_chapters)} chapters found · "
-                f"{len(to_dl)} to download · "
+                f"{len(to_dl)} queued · "
                 f"saving to {config.download_dir}[/dim]\n"
             )
 
-            nonlocal_overall = progress.add_task(
+            overall_tid = progress.add_task(
                 "[bold white]Overall",
                 total=len(to_dl),
                 completed=0,
                 status="",
             )
-            # make available to callback
-            import ctypes
-            overall_task_holder = [nonlocal_overall]
-
-            def _cb(cp: ChapterProgress):
-                nonlocal overall_task
-                overall_task = overall_task_holder[0]
-                on_progress(cp)
+            overall_task[0] = overall_tid
 
             series_dir = download_series(
                 parser=parser,
@@ -237,12 +313,19 @@ def download(url: str, chapters: Optional[str], json_progress: bool,
                 chapter_range=chapter_range,
                 specific_chapters=specific_chapters,
                 json_progress=False,
-                progress_cb=_cb,
+                progress_cb=on_progress,
             )
 
+        except RuntimeError as e:
+            console.print(f"\n[red bold]✗ {e}[/red bold]")
+            watchdog.stop()
+            sys.exit(1)
         except Exception as e:
             console.print(f"\n[red]Download failed:[/red] {e}")
+            watchdog.stop()
             sys.exit(1)
+
+        watchdog.stop()
 
     console.print(f"\n[bold green]✓ Done![/bold green]  {series_dir}\n")
 
