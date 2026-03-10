@@ -1,7 +1,7 @@
 {
   "name": "strip-reader",
-  "author":"ZLouisMiguel on github",
-  "version": "0.1.0",
+  "author": "ZLouisMiguel on github",
+  "version": "0.2.0",
   "description": "Webtoon reader powered by strip",
   "main": "main/index.js",
   "scripts": {
@@ -25,7 +25,9 @@
       {
         "from": "../dist/strip",
         "to": "strip-cli",
-        "filter": ["**/*"]
+        "filter": [
+          "**/*"
+        ]
       }
     ],
     "mac": {
