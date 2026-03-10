@@ -15,8 +15,387 @@ const state = {
   currentPages: [],
   currentPageIndex: 0,
   config: {},
-  activeDownloadId: null,
 };
+
+// ──────────────────────────────────────────────────────────────────
+//  Download Tray
+//
+//  The tray is a persistent bottom drawer that lives across ALL views.
+//  It never navigates away from the current view — it simply slides up
+//  over the content. Multiple downloads can run concurrently; each is
+//  represented by a "job" entry in the tray's job list.
+//
+//  Public API:
+//    DownloadTray.open(prefillUrl?)   – expand & optionally prefill URL
+//    DownloadTray.startJob(url, chapters) – queue a new download job
+// ──────────────────────────────────────────────────────────────────
+
+const DownloadTray = (() => {
+  // jobs: Map<downloadId, JobState>
+  const jobs = new Map();
+
+  const tray = () => document.getElementById("download-tray");
+  const trayBody = () => document.getElementById("tray-body");
+  const jobsEl = () => document.getElementById("tray-jobs");
+  const urlInput = () => document.getElementById("tray-url");
+  const chapInput = () => document.getElementById("tray-chapters");
+  const formError = () => document.getElementById("tray-form-error");
+  const jobCount = () => document.getElementById("tray-job-count");
+  const navBadge = () => document.getElementById("nav-download-badge");
+  const collapseBtn = () => document.getElementById("tray-collapse-btn");
+
+  let _isOpen = false;
+  let _isCollapsed = false; // body hidden but header still shows
+
+  // ── Open / close / collapse ──────────────────────────────────────
+
+  function open(prefillUrl = "") {
+    _isOpen = true;
+    _isCollapsed = false;
+    tray().classList.add("is-open");
+    tray().classList.remove("is-collapsed");
+    if (prefillUrl) {
+      urlInput().value = prefillUrl;
+      chapInput().value = "";
+    }
+    setTimeout(() => urlInput().focus(), 50);
+    _updateCollapseIcon();
+  }
+
+  function close() {
+    // Only close completely if no active jobs remain
+    const activeCount = [...jobs.values()].filter((j) => j.active).length;
+    if (activeCount > 0) {
+      collapse();
+      return;
+    }
+    _isOpen = false;
+    _isCollapsed = false;
+    tray().classList.remove("is-open", "is-collapsed");
+  }
+
+  function collapse() {
+    _isCollapsed = true;
+    tray().classList.add("is-collapsed");
+    _updateCollapseIcon();
+  }
+
+  function expand() {
+    _isCollapsed = false;
+    tray().classList.remove("is-collapsed");
+    _updateCollapseIcon();
+  }
+
+  function toggleCollapse() {
+    _isCollapsed ? expand() : collapse();
+  }
+
+  function _updateCollapseIcon() {
+    const btn = collapseBtn();
+    if (!btn) return;
+    // Arrow points down when expanded (click = collapse), up when collapsed (click = expand)
+    btn.innerHTML = _isCollapsed
+      ? `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:14px;height:14px"><polyline points="6 9 12 15 18 9"/></svg>`
+      : `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:14px;height:14px"><polyline points="18 15 12 9 6 15"/></svg>`;
+  }
+
+  // ── Badge / job count ────────────────────────────────────────────
+
+  function _updateBadge() {
+    const active = [...jobs.values()].filter((j) => j.active).length;
+    const badge = navBadge();
+    const count = jobCount();
+    if (active > 0) {
+      if (badge) {
+        badge.textContent = active;
+        badge.style.display = "inline-flex";
+      }
+      if (count) count.textContent = `(${active} active)`;
+    } else {
+      if (badge) badge.style.display = "none";
+      if (count) count.textContent = jobs.size > 0 ? `(${jobs.size} done)` : "";
+    }
+  }
+
+  // ── Job DOM helpers ──────────────────────────────────────────────
+
+  function _createJobEl(downloadId, url) {
+    const el = document.createElement("div");
+    el.className = "tray-job";
+    el.dataset.downloadId = downloadId;
+
+    const displayUrl = url.length > 60 ? url.slice(0, 57) + "…" : url;
+
+    el.innerHTML = `
+      <div class="tray-job-header">
+        <span class="tray-job-title" id="tjt-${downloadId}">${esc(displayUrl)}</span>
+        <div class="tray-job-actions">
+          <span class="tray-job-status-badge" id="tjs-${downloadId}">starting</span>
+          <button class="btn btn-ghost icon-btn tray-job-cancel" data-id="${downloadId}" title="Cancel">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:12px;height:12px">
+              <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+            </svg>
+          </button>
+        </div>
+      </div>
+      <div class="tray-job-chapter" id="tjc-${downloadId}">Initializing…</div>
+      <div class="tray-job-bar-wrap">
+        <div class="tray-job-bar">
+          <div class="tray-job-fill" id="tjf-${downloadId}" style="width:0%"></div>
+        </div>
+        <span class="tray-job-pct" id="tjp-${downloadId}">0%</span>
+      </div>
+      <div class="tray-job-log" id="tjl-${downloadId}"></div>
+    `;
+
+    el.querySelector(".tray-job-cancel").addEventListener("click", async () => {
+      await window.strip.download.cancel(downloadId);
+      _setJobStatus(downloadId, "cancelled");
+    });
+
+    return el;
+  }
+
+  function _setJobStatus(downloadId, status) {
+    const badge = document.getElementById(`tjs-${downloadId}`);
+    if (!badge) return;
+    badge.textContent = status;
+    badge.className = `tray-job-status-badge status-${status}`;
+
+    const job = jobs.get(downloadId);
+    if (job) {
+      job.active = status === "active" || status === "starting";
+      _updateBadge();
+    }
+
+    // Show dismiss button once finished/errored/cancelled
+    if (["done", "error", "cancelled"].includes(status)) {
+      const cancelBtn = document.querySelector(
+        `.tray-job-cancel[data-id="${downloadId}"]`,
+      );
+      if (cancelBtn) {
+        cancelBtn.title = "Dismiss";
+        cancelBtn.addEventListener(
+          "click",
+          () => {
+            document
+              .querySelector(`.tray-job[data-download-id="${downloadId}"]`)
+              ?.remove();
+            jobs.delete(downloadId);
+            _updateBadge();
+            if (jobs.size === 0) {
+              jobsEl().innerHTML = "";
+            }
+          },
+          { once: true },
+        );
+      }
+    }
+  }
+
+  function _appendLog(downloadId, msg, type = "info") {
+    const logEl = document.getElementById(`tjl-${downloadId}`);
+    if (!logEl) return;
+    const line = document.createElement("div");
+    line.textContent = msg;
+    if (type === "error") line.style.color = "var(--danger)";
+    logEl.appendChild(line);
+    logEl.scrollTop = logEl.scrollHeight;
+  }
+
+  // ── Global progress listener ─────────────────────────────────────
+  // Registered once at boot; handles events for ALL jobs.
+
+  function _onProgress(data) {
+    const { downloadId } = data;
+    if (!downloadId || !jobs.has(downloadId)) return;
+
+    const titleEl = document.getElementById(`tjt-${downloadId}`);
+    const chapterEl = document.getElementById(`tjc-${downloadId}`);
+    const fillEl = document.getElementById(`tjf-${downloadId}`);
+    const pctEl = document.getElementById(`tjp-${downloadId}`);
+
+    switch (data.status) {
+      case "series_info":
+        if (titleEl && data.title) titleEl.textContent = esc(data.title);
+        _setJobStatus(downloadId, "active");
+        break;
+
+      case "fetching_chapters":
+        if (chapterEl) chapterEl.textContent = "Fetching chapter list…";
+        break;
+
+      case "chapter_list":
+        if (chapterEl) chapterEl.textContent = `${data.total} chapters found`;
+        break;
+
+      case "chapter_start":
+        if (chapterEl)
+          chapterEl.textContent = `Ch. ${data.chapter} – ${esc(data.title ?? "")}`;
+        _setJobStatus(downloadId, "active");
+        break;
+
+      case "chapter_progress": {
+        if (chapterEl)
+          chapterEl.textContent = `Ch. ${data.chapter_number}: ${esc(data.chapter_title ?? "")}  (${data.current}/${data.total})`;
+        const pct = Math.round((data.current / data.total) * 100);
+        if (fillEl) fillEl.style.width = pct + "%";
+        if (pctEl) pctEl.textContent = pct + "%";
+        break;
+      }
+
+      case "progress":
+        if (fillEl) fillEl.style.width = data.percent + "%";
+        if (pctEl) pctEl.textContent = data.percent + "%";
+        break;
+
+      case "chapter_done":
+        _appendLog(
+          downloadId,
+          `✓ Ch. ${data.chapter} (${data.pages_saved} pages)`,
+        );
+        break;
+
+      case "skipped":
+        _appendLog(downloadId, `– Ch. ${data.chapter} skipped`);
+        break;
+
+      case "rate_limited":
+        if (chapterEl)
+          chapterEl.textContent = `Rate-limited — waiting ${data.wait_seconds}s…`;
+        break;
+
+      case "chapter_delay":
+        // Silent; no UI noise needed for normal inter-chapter pauses
+        break;
+
+      case "done":
+        if (titleEl && data.series) titleEl.textContent = esc(data.series);
+        if (chapterEl) chapterEl.textContent = "Complete!";
+        if (fillEl) fillEl.style.width = "100%";
+        if (pctEl) pctEl.textContent = "100%";
+        _appendLog(downloadId, `✓ Saved to ${data.directory}`);
+        _setJobStatus(downloadId, "done");
+        // Refresh library in background so new chapters appear
+        setTimeout(() => loadLibrary(), 1200);
+        break;
+
+      case "error":
+        _appendLog(downloadId, `✗ ${data.message}`, "error");
+        _setJobStatus(downloadId, "error");
+        break;
+
+      case "process_exit":
+        if (data.code !== 0) {
+          const job = jobs.get(downloadId);
+          if (job && job.active) {
+            _appendLog(
+              downloadId,
+              `Process exited with code ${data.code}`,
+              "error",
+            );
+            _setJobStatus(downloadId, "error");
+          }
+        }
+        break;
+
+      case "log":
+        _appendLog(downloadId, data.message);
+        break;
+    }
+  }
+
+  // ── Start a new download job ─────────────────────────────────────
+
+  async function startJob(url, chapters) {
+    const formErr = formError();
+    if (formErr) {
+      formErr.style.display = "none";
+    }
+
+    let downloadId;
+    try {
+      downloadId = await window.strip.download.start({
+        url,
+        chapters: chapters || undefined,
+        downloadDir: state.config.downloadDir,
+      });
+    } catch (e) {
+      if (formErr) {
+        formErr.textContent = `Failed to start: ${e.message}`;
+        formErr.style.display = "block";
+      }
+      return;
+    }
+
+    const job = { downloadId, url, active: true };
+    jobs.set(downloadId, job);
+
+    const el = _createJobEl(downloadId, url);
+    const list = jobsEl();
+    list.prepend(el);
+
+    _updateBadge();
+
+    // Clear the form for the next download
+    urlInput().value = "";
+    chapInput().value = "";
+  }
+
+  // ── Init: wire buttons, register global listener ─────────────────
+
+  function init() {
+    // Global progress listener — single registration, handles all jobs
+    window.strip.download.onProgress(_onProgress);
+
+    document.getElementById("tray-header")?.addEventListener("click", (e) => {
+      // Clicking the header bar (not its buttons) toggles collapse
+      if (e.target.closest("button")) return;
+      if (_isOpen) toggleCollapse();
+    });
+
+    document
+      .getElementById("tray-collapse-btn")
+      ?.addEventListener("click", (e) => {
+        e.stopPropagation();
+        toggleCollapse();
+      });
+
+    document
+      .getElementById("tray-close-btn")
+      ?.addEventListener("click", (e) => {
+        e.stopPropagation();
+        close();
+      });
+
+    document.getElementById("tray-start-btn")?.addEventListener("click", () => {
+      const url = urlInput()?.value.trim();
+      const chap = chapInput()?.value.trim();
+      if (!url) {
+        urlInput()?.focus();
+        return;
+      }
+      startJob(url, chap);
+    });
+
+    // Allow Enter in the URL field to start
+    urlInput()?.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") {
+        const url = urlInput().value.trim();
+        const chap = chapInput().value.trim();
+        if (url) startJob(url, chap);
+      }
+    });
+
+    // Nav "Download" link opens the tray
+    document.getElementById("nav-download")?.addEventListener("click", (e) => {
+      e.preventDefault();
+      _isOpen ? (_isCollapsed ? expand() : collapse()) : open();
+    });
+  }
+
+  return { init, open, close, startJob };
+})();
 
 // ──────────────────────────────────────────────────────────────────
 //  Continue Reading Feature
@@ -94,7 +473,6 @@ function showView(id) {
 // ──────────────────────────────────────────────────────────────────
 async function loadLibrary() {
   const grid = document.getElementById("library-grid");
-
   grid.innerHTML =
     '<div class="empty-state"><div class="empty-icon">◈</div><p style="color:var(--text-muted)">Loading…</p></div>';
 
@@ -142,7 +520,7 @@ function buildEmptyState() {
   `;
   div
     .querySelector("#btn-empty-download")
-    .addEventListener("click", () => showView("download"));
+    .addEventListener("click", () => DownloadTray.open());
   return div;
 }
 
@@ -191,7 +569,6 @@ async function buildSeriesCard(series) {
 // ──────────────────────────────────────────────────────────────────
 async function openSeries(series) {
   state.currentSeries = series;
-
   const container = document.getElementById("series-detail");
 
   const coverHtml = series.coverPath
@@ -264,13 +641,11 @@ async function openSeries(series) {
   container
     .querySelector("#btn-series-download")
     ?.addEventListener("click", () => {
-      document.getElementById("download-url").value =
-        series.metadata?.url ?? "";
-      showView("download");
-      document
-        .querySelectorAll(".nav-link")
-        .forEach((a) => a.classList.remove("active"));
-      document.querySelector('[data-view="download"]')?.classList.add("active");
+      // ── Key fix: open the tray pre-filled with this series URL.
+      // The user stays on the series detail page and can keep reading
+      // while the download runs in the tray.
+      const seriesUrl = series.url ?? series.metadata?.url ?? "";
+      DownloadTray.open(seriesUrl);
     });
 
   showView("series");
@@ -310,7 +685,6 @@ async function buildChapterRows(series, lastRead = null) {
 function updateChapterNavButtons() {
   const { currentSeries: series, currentChapter: chapter } = state;
   if (!series || !chapter) return;
-
   const idx = series.chapters.findIndex((c) => c.number === chapter.number);
   document.getElementById("btn-prev-chapter").disabled = idx <= 0;
   document.getElementById("btn-next-chapter").disabled =
@@ -333,15 +707,11 @@ async function openChapter(series, chapter, scrollToPage = 0) {
   titleEl.textContent = `${series.title}  ·  Chapter ${chapter.number}`;
   pagesEl.innerHTML = "";
   pageInfo.textContent = "";
-
-  // Reset overlay — class toggle only, no display change
   overlay.classList.remove("is-visible");
   overlay.setAttribute("aria-hidden", "true");
 
   showView("reader");
   updateChapterNavButtons();
-
-  // Update end-of-chapter card text and button states
   setupChapterEndOverlay(series, chapter);
 
   let pages = [];
@@ -411,13 +781,11 @@ async function openChapter(series, chapter, scrollToPage = 0) {
   const container = document.getElementById("reader-container");
   let saveTimer = null;
 
-  // Remove previous chapter's listener before attaching a new one
   if (container._scrollListener) {
     container.removeEventListener("scroll", container._scrollListener);
   }
 
   const scrollListener = () => {
-    // ── Page counter ───────────────────────────────────────────────
     const imgs = pagesEl.querySelectorAll("img");
     let visibleIdx = 0;
     imgs.forEach((img, i) => {
@@ -426,7 +794,6 @@ async function openChapter(series, chapter, scrollToPage = 0) {
     });
     pageInfo.textContent = `${visibleIdx + 1} / ${pages.length}`;
 
-    // ── Save progress (debounced) ──────────────────────────────────
     clearTimeout(saveTimer);
     saveTimer = setTimeout(() => {
       window.strip.progress.set(progressKey, visibleIdx);
@@ -438,9 +805,6 @@ async function openChapter(series, chapter, scrollToPage = 0) {
       );
     }, 500);
 
-    // ── End-of-chapter overlay ─────────────────────────────────────
-    // Hysteresis: show at <120px from bottom, hide only when scrolled
-    // back >180px. Class-toggle only — zero display changes, zero reflow.
     const distFromBottom =
       container.scrollHeight - container.scrollTop - container.clientHeight;
     const isVisible = overlay.classList.contains("is-visible");
@@ -465,12 +829,10 @@ function setupChapterEndOverlay(series, chapter) {
   const endNextBtn = document.getElementById("btn-end-next-chapter");
 
   endTitle.textContent = `${series.title} · Chapter ${chapter.number}`;
-
   const idx = series.chapters.findIndex((c) => c.number === chapter.number);
   endPrevBtn.disabled = idx <= 0;
   endNextBtn.disabled = idx >= series.chapters.length - 1;
 
-  // Always hidden when a chapter first loads — scroll listener shows it
   overlay.classList.remove("is-visible");
   overlay.setAttribute("aria-hidden", "true");
 }
@@ -481,103 +843,6 @@ function goBackFromReader() {
   } else {
     showView("library");
   }
-}
-
-// ──────────────────────────────────────────────────────────────────
-//  Download
-// ──────────────────────────────────────────────────────────────────
-async function startDownload() {
-  const url = document.getElementById("download-url").value.trim();
-  const chapters = document.getElementById("download-chapters").value.trim();
-
-  if (!url) {
-    document.getElementById("download-url").focus();
-    return;
-  }
-
-  const progressCard = document.getElementById("download-progress-card");
-  const fillEl = document.getElementById("dl-progress-fill");
-  const pctEl = document.getElementById("dl-progress-pct");
-  const chapterInfo = document.getElementById("dl-chapter-info");
-  const seriesTitle = document.getElementById("dl-series-title");
-  const logEl = document.getElementById("dl-log");
-
-  progressCard.style.display = "block";
-  fillEl.style.width = "0%";
-  pctEl.textContent = "0%";
-  seriesTitle.textContent = "Starting…";
-  chapterInfo.textContent = "Initializing…";
-  logEl.innerHTML = "";
-
-  const opts = { url, downloadDir: state.config.downloadDir };
-  if (chapters) opts.chapters = chapters;
-
-  try {
-    state.activeDownloadId = await window.strip.download.start(opts);
-  } catch (e) {
-    logEl.innerHTML += `<div style="color:var(--danger)">Error: ${esc(e.message)}</div>`;
-    return;
-  }
-
-  window.strip.download.onProgress((data) => {
-    if (data.downloadId !== state.activeDownloadId) return;
-
-    switch (data.status) {
-      case "series_info":
-        seriesTitle.textContent = data.title ?? "—";
-        break;
-      case "chapter_progress": {
-        chapterInfo.textContent = `Chapter ${data.chapter_number}: ${esc(data.chapter_title ?? "")}  (${data.current}/${data.total})`;
-        const overall = Math.round((data.current / data.total) * 100);
-        fillEl.style.width = overall + "%";
-        pctEl.textContent = overall + "%";
-        break;
-      }
-      case "progress":
-        fillEl.style.width = data.percent + "%";
-        pctEl.textContent = data.percent + "%";
-        break;
-      case "chapter_done":
-        addLog(
-          logEl,
-          `✓ Chapter ${data.chapter} downloaded (${data.pages_saved} pages)`,
-        );
-        break;
-      case "skipped":
-        addLog(logEl, `– Chapter ${data.chapter} skipped (already downloaded)`);
-        break;
-      case "done":
-        seriesTitle.textContent = data.series ?? seriesTitle.textContent;
-        chapterInfo.textContent = "Download complete!";
-        fillEl.style.width = "100%";
-        pctEl.textContent = "100%";
-        addLog(logEl, `✓ Saved to ${data.directory}`);
-        state.activeDownloadId = null;
-        setTimeout(() => loadLibrary(), 1000);
-        break;
-      case "error":
-        addLog(logEl, `✗ ${data.message}`, "error");
-        break;
-      case "process_exit":
-        if (data.code !== 0 && state.activeDownloadId) {
-          addLog(logEl, `Process exited with code ${data.code}`, "error");
-          state.activeDownloadId = null;
-        }
-        window.strip.download.offProgress();
-        break;
-      case "log":
-        addLog(logEl, data.message);
-        break;
-    }
-  });
-}
-
-function addLog(el, msg, type = "info") {
-  const line = document.createElement("div");
-  line.textContent = msg;
-  if (type === "error") line.style.color = "var(--danger)";
-  el.appendChild(line);
-  el.scrollTop = el.scrollHeight;
 }
 
 // ──────────────────────────────────────────────────────────────────
@@ -618,7 +883,10 @@ async function init() {
     applyTheme(state.config.theme ?? "system");
   } catch (_) {}
 
-  document.querySelectorAll(".nav-link").forEach((link) => {
+  // Initialise the download tray (registers its IPC listener etc.)
+  DownloadTray.init();
+
+  document.querySelectorAll(".nav-link[data-view]").forEach((link) => {
     link.addEventListener("click", (e) => {
       e.preventDefault();
       const view = link.dataset.view;
@@ -631,9 +899,11 @@ async function init() {
   document
     .getElementById("btn-refresh-library")
     ?.addEventListener("click", loadLibrary);
+
+  // "Add Comic" in library header → open tray
   document
     .getElementById("btn-add-download")
-    ?.addEventListener("click", () => showView("download"));
+    ?.addEventListener("click", () => DownloadTray.open());
 
   document.getElementById("btn-back-library")?.addEventListener("click", () => {
     showView("library");
@@ -686,20 +956,6 @@ async function init() {
   document
     .getElementById("btn-end-back")
     ?.addEventListener("click", goBackFromReader);
-
-  document
-    .getElementById("btn-start-download")
-    ?.addEventListener("click", startDownload);
-
-  document
-    .getElementById("btn-cancel-download")
-    ?.addEventListener("click", async () => {
-      if (state.activeDownloadId) {
-        await window.strip.download.cancel(state.activeDownloadId);
-        state.activeDownloadId = null;
-        document.getElementById("dl-chapter-info").textContent = "Cancelled.";
-      }
-    });
 
   document.getElementById("theme-toggle")?.addEventListener("click", () => {
     const next =
