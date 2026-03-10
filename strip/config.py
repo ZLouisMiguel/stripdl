@@ -7,33 +7,54 @@ from pathlib import Path
 from typing import Any
 
 
-_CONFIG_DIR = Path.home() / ".strip"
+_CONFIG_DIR  = Path.home() / ".strip"
 _CONFIG_FILE = _CONFIG_DIR / "config.json"
 
 _DEFAULTS: dict = {
-    # Where to save downloaded comics
+    # ── Download location ─────────────────────────────────────────
     "download_dir": str(Path.home() / "strip-data"),
-    # Image quality for JPEG conversion (1-95)
+
+    # ── Concurrency ───────────────────────────────────────────────
+    # Chapters downloaded in parallel within a single series download.
+    "max_concurrent_chapters": 3,
+    # Images downloaded in parallel within a single chapter.
+    "image_concurrency": 4,
+    # Maximum simultaneous series download jobs (Electron queue).
+    "max_concurrent_jobs": 2,
+
+    # ── Rate limiting ─────────────────────────────────────────────
+    # Target requests per second across ALL download threads combined.
+    # A token-bucket enforces this globally. Set to 0 to disable.
+    "rate_limit": 8.0,
+    # Seconds to wait between chapters when NOT using concurrent mode
+    # (kept for backward compat; ignored when max_concurrent_chapters > 1).
+    "chapter_delay": 0.0,
+
+    # ── Image quality ─────────────────────────────────────────────
     "image_quality": 85,
-    # Maximum concurrent image downloads per chapter
-    # (keep moderate – too high triggers CDN rate-limits)
-    "concurrent_downloads": 4,
-    # Seconds to wait between chapters – polite crawling and rate-limit avoidance.
-    # Increase if you encounter frequent 429 responses.
-    "chapter_delay": 1.5,
-    # Whether to overwrite already-downloaded chapters
-    # (false = resume / skip completed chapters)
+
+    # ── Resume / integrity ────────────────────────────────────────
     "overwrite": False,
-    # Theme preference for Electron app ("light" | "dark" | "system")
+    # When true, compute SHA-256 of each downloaded image and store in
+    # chapter manifest.json. On resume, re-download if hash mismatches.
+    "verify_integrity": False,
+
+    # ── Metadata cache ────────────────────────────────────────────
+    # Re-use cached series metadata (title, author, etc.) if younger
+    # than this many days.  Set to 0 to always re-fetch.
+    "cache_ttl_days": 7,
+
+    # ── Reader ────────────────────────────────────────────────────
+    "lazy_loading": True,
+    "preload_next_chapter": True,
+
+    # ── Appearance ────────────────────────────────────────────────
     "theme": "system",
 }
 
 
 class Config:
-    """
-    Thin wrapper around a JSON config file.
-    Access like a dict: cfg["download_dir"]
-    """
+    """Thin wrapper around a JSON config file.  Access like a dict."""
 
     def __init__(self):
         self._data: dict = {}
@@ -46,9 +67,8 @@ class Config:
             try:
                 with open(_CONFIG_FILE) as f:
                     self._data = json.load(f)
-            except json.JSONDecodeError:
+            except (json.JSONDecodeError, OSError):
                 self._data = {}
-        # Fill in any missing keys from defaults
         for k, v in _DEFAULTS.items():
             self._data.setdefault(k, v)
 
@@ -83,5 +103,5 @@ class Config:
         return p
 
 
-# Module-level singleton – import this everywhere
+# Module-level singleton
 config = Config()
