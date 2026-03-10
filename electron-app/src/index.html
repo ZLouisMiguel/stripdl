@@ -3,6 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!-- v2: file: added to img-src; webSecurity is now enabled in main process -->
     <meta
       http-equiv="Content-Security-Policy"
       content="default-src 'self'; img-src 'self' file: data:; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; script-src 'self'"
@@ -17,6 +18,9 @@
     <link rel="stylesheet" href="css/main.css" />
   </head>
   <body data-theme="light">
+    <!-- ── Toast container (fixed, top-right) ────────────────── -->
+    <div id="toast-container" class="toast-container" aria-live="polite"></div>
+
     <!-- ── Sidebar ─────────────────────────────────────────── -->
     <nav id="sidebar">
       <div class="sidebar-logo">
@@ -41,10 +45,6 @@
           </a>
         </li>
         <li>
-          <!--
-            Clicking "Download" in the nav opens/focuses the download tray
-            rather than switching to a separate full-page view.
-          -->
           <a
             href="#"
             data-action="open-tray"
@@ -61,7 +61,6 @@
               <path d="M5 20h14" />
             </svg>
             Download
-            <!-- Badge shows count of active jobs -->
             <span
               class="nav-download-badge"
               id="nav-download-badge"
@@ -126,6 +125,36 @@
         <header class="view-header">
           <h1>Library</h1>
           <div class="header-actions">
+            <!-- Search bar (v2) -->
+            <div class="search-wrap">
+              <svg
+                class="search-icon"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+              >
+                <circle cx="11" cy="11" r="8" />
+                <line x1="21" y1="21" x2="16.65" y2="16.65" />
+              </svg>
+              <input
+                type="search"
+                id="library-search"
+                class="input search-input"
+                placeholder="Search…"
+                aria-label="Search library"
+              />
+            </div>
+            <!-- Sort dropdown (v2) -->
+            <select
+              class="select sort-select"
+              id="library-sort"
+              aria-label="Sort by"
+            >
+              <option value="title">A – Z</option>
+              <option value="last_read">Last Read</option>
+              <option value="chapters">Most Chapters</option>
+            </select>
             <button class="btn btn-primary" id="btn-add-download">
               <svg
                 viewBox="0 0 24 24"
@@ -141,7 +170,7 @@
             <button
               class="btn btn-ghost"
               id="btn-refresh-library"
-              title="Refresh"
+              title="Refresh library"
             >
               <svg
                 viewBox="0 0 24 24"
@@ -155,16 +184,7 @@
             </button>
           </div>
         </header>
-        <div id="library-grid" class="series-grid">
-          <div class="empty-state" id="library-empty">
-            <div class="empty-icon">◈</div>
-            <p>Your library is empty.</p>
-            <p class="muted">Download a webtoon to get started.</p>
-            <button class="btn btn-primary" id="btn-empty-download">
-              Download something
-            </button>
-          </div>
-        </div>
+        <div id="library-grid" class="series-grid"></div>
       </section>
 
       <!-- Series detail view -->
@@ -201,7 +221,7 @@
             <button
               class="btn btn-ghost icon-btn"
               id="btn-prev-chapter"
-              title="Previous chapter"
+              title="Previous chapter (P)"
               disabled
             >
               <svg
@@ -217,7 +237,7 @@
             <button
               class="btn btn-ghost icon-btn"
               id="btn-next-chapter"
-              title="Next chapter"
+              title="Next chapter (N)"
               disabled
             >
               <svg
@@ -234,11 +254,9 @@
             <span id="reader-page-info"></span>
           </div>
         </div>
-
         <div id="reader-container">
           <div id="reader-pages"></div>
         </div>
-
         <div id="chapter-end-overlay" aria-hidden="true">
           <div class="chapter-end-card">
             <div class="chapter-end-label">End of chapter</div>
@@ -296,6 +314,7 @@
       <section id="view-settings" class="view">
         <header class="view-header"><h1>Settings</h1></header>
         <div class="settings-wrap">
+          <!-- Storage -->
           <div class="settings-group card">
             <h2 class="settings-group-title">Storage</h2>
             <div class="setting-row">
@@ -310,6 +329,136 @@
               </button>
             </div>
           </div>
+
+          <!-- Downloads (v2) -->
+          <div class="settings-group card">
+            <h2 class="settings-group-title">Downloads</h2>
+            <div class="setting-row">
+              <div>
+                <div class="setting-label">Concurrent chapters</div>
+                <div class="setting-desc muted">
+                  Number of chapters to download in parallel.
+                </div>
+              </div>
+              <input
+                type="number"
+                class="input setting-num"
+                id="setting-concurrent-chapters"
+                min="1"
+                max="10"
+                value="3"
+              />
+            </div>
+            <div class="setting-row">
+              <div>
+                <div class="setting-label">Concurrent images</div>
+                <div class="setting-desc muted">
+                  Images downloaded at once per chapter.
+                </div>
+              </div>
+              <input
+                type="number"
+                class="input setting-num"
+                id="setting-image-concurrency"
+                min="1"
+                max="16"
+                value="4"
+              />
+            </div>
+            <div class="setting-row">
+              <div>
+                <div class="setting-label">Rate limit (req/sec)</div>
+                <div class="setting-desc muted">
+                  Max requests per second across all threads.
+                </div>
+              </div>
+              <input
+                type="number"
+                class="input setting-num"
+                id="setting-rate-limit"
+                min="1"
+                max="30"
+                step="0.5"
+                value="8"
+              />
+            </div>
+            <div class="setting-row">
+              <div>
+                <div class="setting-label">Metadata cache (days)</div>
+                <div class="setting-desc muted">
+                  Re-use cached series info for this many days. Set 0 to always
+                  refresh.
+                </div>
+              </div>
+              <input
+                type="number"
+                class="input setting-num"
+                id="setting-cache-ttl"
+                min="0"
+                max="365"
+                value="7"
+              />
+            </div>
+            <div class="setting-row">
+              <div>
+                <div class="setting-label">Verify image integrity</div>
+                <div class="setting-desc muted">
+                  Check SHA-256 of each image on resume (slower).
+                </div>
+              </div>
+              <label class="toggle">
+                <input type="checkbox" id="setting-verify-integrity" />
+                <span class="toggle-slider"></span>
+              </label>
+            </div>
+            <div class="setting-row">
+              <div>
+                <div class="setting-label">Max simultaneous jobs</div>
+                <div class="setting-desc muted">
+                  Queue additional jobs beyond this limit.
+                </div>
+              </div>
+              <input
+                type="number"
+                class="input setting-num"
+                id="setting-max-jobs"
+                min="1"
+                max="5"
+                value="2"
+              />
+            </div>
+          </div>
+
+          <!-- Reader (v2) -->
+          <div class="settings-group card">
+            <h2 class="settings-group-title">Reader</h2>
+            <div class="setting-row">
+              <div>
+                <div class="setting-label">Lazy load images</div>
+                <div class="setting-desc muted">
+                  Load images only as you scroll (reduces memory).
+                </div>
+              </div>
+              <label class="toggle">
+                <input type="checkbox" id="setting-lazy-loading" checked />
+                <span class="toggle-slider"></span>
+              </label>
+            </div>
+            <div class="setting-row">
+              <div>
+                <div class="setting-label">Preload next chapter</div>
+                <div class="setting-desc muted">
+                  Start loading the next chapter near the end.
+                </div>
+              </div>
+              <label class="toggle">
+                <input type="checkbox" id="setting-preload-next" checked />
+                <span class="toggle-slider"></span>
+              </label>
+            </div>
+          </div>
+
+          <!-- Appearance -->
           <div class="settings-group card">
             <h2 class="settings-group-title">Appearance</h2>
             <div class="setting-row">
@@ -321,21 +470,18 @@
               </select>
             </div>
           </div>
+
+          <!-- About -->
           <div class="settings-group card">
             <h2 class="settings-group-title">About</h2>
-            <p class="muted">strip v0.2.0 — webtoon downloader &amp; reader</p>
+            <p class="muted">strip v0.3.0 — webtoon downloader &amp; reader</p>
           </div>
         </div>
       </section>
     </main>
 
-    <!-- ── Download Tray ────────────────────────────────────────
-         Sits outside #main so it overlays all views.
-         Collapsed by default; expands on demand.
-         Never navigates away from the current view.
-    ─────────────────────────────────────────────────────────── -->
+    <!-- ── Download Tray ─────────────────────────────────────── -->
     <div id="download-tray" class="download-tray" aria-label="Download tray">
-      <!-- Tray header bar (always visible when tray is open) -->
       <div class="tray-header" id="tray-header">
         <div class="tray-header-left">
           <svg
@@ -385,10 +531,7 @@
           </button>
         </div>
       </div>
-
-      <!-- Tray body: input form + job list -->
       <div class="tray-body" id="tray-body">
-        <!-- New download form -->
         <div class="tray-form" id="tray-form">
           <div class="tray-form-row">
             <input
@@ -424,11 +567,7 @@
             style="display: none"
           ></div>
         </div>
-
-        <!-- Active / recent jobs list -->
-        <div class="tray-jobs" id="tray-jobs">
-          <!-- Job entries injected by JS -->
-        </div>
+        <div class="tray-jobs" id="tray-jobs"></div>
       </div>
     </div>
 
