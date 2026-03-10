@@ -5,7 +5,7 @@ long_description = (Path(__file__).parent / "README.md").read_text(encoding="utf
 
 setup(
     name="strip",
-    version="0.1.0",
+    version="0.2.0",
     description="Webtoon downloader and library manager",
     long_description=long_description,
     long_description_content_type="text/markdown",
@@ -22,7 +22,6 @@ setup(
     ],
     entry_points={
         "console_scripts": [
-            # This is what makes `strip` available as a terminal command
             "stripdl=strip.cli:main",
         ],
     },
