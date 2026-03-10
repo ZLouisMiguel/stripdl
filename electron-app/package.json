@@ -1,16 +1,17 @@
 {
   "name": "strip-reader",
   "author": "ZLouisMiguel on github",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Webtoon reader powered by strip",
   "main": "main/index.js",
   "scripts": {
     "start": "electron .",
     "dev": "electron . --dev",
-    "build": "electron-builder",
-    "build:win": "electron-builder --win",
-    "build:mac": "electron-builder --mac",
-    "build:linux": "electron-builder --linux"
+    "build": "npm run build-cli && electron-builder",
+    "build:win": "npm run build-cli && electron-builder --win",
+    "build:mac": "npm run build-cli && electron-builder --mac",
+    "build:linux": "npm run build-cli && electron-builder --linux",
+    "build-cli": "cd .. && python build_cli.py"
   },
   "build": {
     "appId": "com.strip.reader",
@@ -23,7 +24,7 @@
     ],
     "extraResources": [
       {
-        "from": "../dist/strip",
+        "from": "resources/strip-cli",
         "to": "strip-cli",
         "filter": [
           "**/*"
