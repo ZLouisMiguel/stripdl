@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 # strip/cli.py
+# v2: new CLI options, hierarchical concurrent-chapter progress display.
 
 import json
 import sys
 import threading
 import time
-from pathlib import Path
-from typing import Optional, List
+from typing import List, Optional
 
 import click
 from rich.console import Console
@@ -25,7 +25,7 @@ from strip.library import scan_library
 
 console = Console()
 
-_VERSION = "0.2.1"
+_VERSION = "0.3.0"
 
 
 # ────────────────────────────────────────────────────────────────────
@@ -44,7 +44,7 @@ def cli():
     ███████║   ██║   ██║  ██║██║██║
     ╚══════╝   ╚═╝   ╚═╝  ╚═╝╚═╝╚═╝
 
-    Webtoon downloader & library manager.
+    Webtoon downloader & library manager — v2.
     """
     pass
 
@@ -54,12 +54,6 @@ def cli():
 # ────────────────────────────────────────────────────────────────────
 
 class _ProgressWatchdog:
-    """
-    Background daemon.  If no progress callback fires for *stall_secs*
-    every active chapter task is labelled "[yellow]waiting…[/yellow]".
-    Clears the moment a new callback arrives.
-    """
-
     def __init__(self, progress: Progress, stall_secs: float = 20.0):
         self._progress   = progress
         self._stall_secs = stall_secs
@@ -98,36 +92,21 @@ class _ProgressWatchdog:
 
 
 # ────────────────────────────────────────────────────────────────────
-#  Thread helpers: run blocking calls without freezing the display
+#  Thread helpers
 # ────────────────────────────────────────────────────────────────────
 
 def _run_in_thread(fn):
-    """
-    Run fn() on a daemon thread.  Returns (result, error).
-    The caller polls a threading.Event and can animate the display
-    while waiting.
-    """
-    result = [None]
-    error  = [None]
-    done   = threading.Event()
-
+    result = [None]; error = [None]; done = threading.Event()
     def _target():
         try:    result[0] = fn()
         except Exception as exc: error[0] = exc
         finally: done.set()
-
     threading.Thread(target=_target, daemon=True).start()
     return result, error, done
 
 
 def _wait_animated(done: threading.Event, progress: Progress, task_id: TaskID,
                    base_desc: str, interval: float = 0.35):
-    """
-    Block until *done* is set.  Every *interval* seconds update the
-    task description with a braille spinner frame so the user can see
-    something is happening.  Never calls console.status() — that
-    conflicts with a live Progress display.
-    """
     frames = ["⠋","⠙","⠹","⠸","⠼","⠴","⠦","⠧","⠇","⠏"]
     i = 0
     while not done.wait(timeout=interval):
@@ -142,28 +121,18 @@ def _wait_animated(done: threading.Event, progress: Progress, task_id: TaskID,
 def _fetch_chapters_live(parser, url: str, progress: Progress,
                          task_id: TaskID) -> List[ChapterInfo]:
     """
-    Fetch the chapter list one pagination page at a time, updating the
-    task description after each page so the user sees:
-
-        Fetching chapters…  page 4  (37 found)
-
-    Uses parser._fetch_chapter_page() if available (WebtoonsParser
-    exposes it), otherwise falls back to the public get_chapter_list()
-    on a background thread with the animated spinner.
+    Fetch chapter list using parser._fetch_chapter_page if available (for live
+    per-page counter), otherwise fall back to get_chapter_list on a thread.
     """
     if not hasattr(parser, "_fetch_chapter_page"):
-        # Generic fallback — run get_chapter_list on a thread
         result, error, done = _run_in_thread(lambda: parser.get_chapter_list(url))
         _wait_animated(done, progress, task_id, "Fetching chapters…")
-        if error[0]:
-            raise error[0]
+        if error[0]: raise error[0]
         return result[0]
 
-    # Instrumented paginated path
     chapters: List[ChapterInfo] = []
     page = 1
     while True:
-        # Fetch one pagination page on a thread so the spinner keeps running
         _page_result: list = []
         _page_error:  list = []
         _page_done = threading.Event()
@@ -178,21 +147,16 @@ def _fetch_chapters_live(parser, url: str, progress: Progress,
         base = f"Fetching chapters…  page {page}  ({len(chapters)} found)"
         _wait_animated(_page_done, progress, task_id, base)
 
-        if _page_error:
-            raise _page_error[0]
+        if _page_error: raise _page_error[0]
 
         page_items = _page_result
-        if not page_items:
-            break
+        if not page_items: break
 
         chapters.extend(page_items)
-        progress.update(
-            task_id,
-            description=f"Fetching chapters…  page {page}  ({len(chapters)} found)",
-        )
+        progress.update(task_id,
+            description=f"Fetching chapters…  page {page}  ({len(chapters)} found)")
 
-        if len(page_items) < 10:
-            break
+        if len(page_items) < 10: break
         page += 1
 
     chapters.sort(key=lambda c: c.number)
@@ -206,32 +170,35 @@ def _fetch_chapters_live(parser, url: str, progress: Progress,
 @cli.command()
 @click.argument("url")
 @click.option("--chapters", "-c",
-              help="Chapters to download: range '1-20' or list '1,3,5'.")
-@click.option("--json-progress", is_flag=True, hidden=True,
-              help="Emit JSON progress lines (Electron subprocess mode).")
-@click.option("--output", "-o", type=click.Path(),
-              help="Override download directory for this run.")
-@click.option("--concurrent-downloads", default=None, type=int,
-              help="Concurrent image downloads per chapter (default: 4).")
-@click.option("--chapter-delay", default=None, type=float,
-              help="Seconds to wait between chapters (default: 1.5).")
+              help="Chapters: range '1-20' or list '1,3,5'.")
+@click.option("--json-progress", is_flag=True, hidden=True)
+@click.option("--output", "-o", type=click.Path())
+@click.option("--chapter-concurrency", default=None, type=int,
+              help="Concurrent chapters (default: from config, 3).")
+@click.option("--image-concurrency",   default=None, type=int,
+              help="Concurrent images per chapter (default: from config, 4).")
+@click.option("--rate-limit",          default=None, type=float,
+              help="Max requests/sec across all threads (default: from config, 8).")
+@click.option("--no-cache", is_flag=True, default=False,
+              help="Ignore cached series metadata; re-fetch from network.")
+@click.option("--verify", is_flag=True, default=False,
+              help="Verify image integrity via SHA-256 checksums.")
 def download(
-    url: str,
-    chapters: Optional[str],
-    json_progress: bool,
-    output: Optional[str],
-    concurrent_downloads: Optional[int],
-    chapter_delay: Optional[float],
+    url, chapters, json_progress, output,
+    chapter_concurrency, image_concurrency, rate_limit,
+    no_cache, verify,
 ):
     """Download a webtoon series from URL.
 
-    Resumes automatically — completed chapters are skipped.
-    Two terminals cannot download the same series simultaneously.
+    Chapters download concurrently (configurable).
+    Resumes automatically; completed chapters are skipped.
     """
-
-    if output:                    config["download_dir"]        = output
-    if concurrent_downloads:      config["concurrent_downloads"] = concurrent_downloads
-    if chapter_delay is not None: config["chapter_delay"]        = chapter_delay
+    if output:                config["download_dir"]          = output
+    if chapter_concurrency:   config["max_concurrent_chapters"] = chapter_concurrency
+    if image_concurrency:     config["image_concurrency"]     = image_concurrency
+    if rate_limit is not None: config["rate_limit"]           = rate_limit
+    if no_cache:              config["cache_ttl_days"]         = 0
+    if verify:                config["verify_integrity"]       = True
 
     try:
         parser = get_parser(url)
@@ -242,7 +209,7 @@ def download(
             console.print(f"[red]Error:[/red] {e}")
         sys.exit(1)
 
-    # ── Parse chapter filter ─────────────────────────────────────────
+    # Parse chapter filter
     chapter_range     = None
     specific_chapters = None
     if chapters:
@@ -251,36 +218,26 @@ def download(
             try:
                 chapter_range = (float(parts[0]), float(parts[1]))
             except ValueError:
-                console.print("[red]Invalid range. Use e.g. 1-10[/red]")
-                sys.exit(1)
+                console.print("[red]Invalid range. Use e.g. 1-10[/red]"); sys.exit(1)
         else:
             try:
                 specific_chapters = [int(x.strip()) for x in chapters.split(",")]
             except ValueError:
-                console.print("[red]Invalid chapter list. Use e.g. 1,2,5[/red]")
-                sys.exit(1)
+                console.print("[red]Invalid list. Use e.g. 1,2,5[/red]"); sys.exit(1)
 
     # ── JSON / Electron mode ─────────────────────────────────────────
     if json_progress:
         try:
-            download_series(
-                parser=parser, url=url,
-                chapter_range=chapter_range,
-                specific_chapters=specific_chapters,
-                json_progress=True,
-            )
+            download_series(parser=parser, url=url,
+                            chapter_range=chapter_range,
+                            specific_chapters=specific_chapters,
+                            json_progress=True)
         except RuntimeError as e:
             print(json.dumps({"status": "error", "message": str(e)}), flush=True)
             sys.exit(1)
         return
 
     # ── Interactive Rich CLI mode ────────────────────────────────────
-    #
-    # Rule: NEVER call console.status() while a Progress live display is
-    # active.  They both take over terminal rendering and collide, causing
-    # the spinner to freeze.  All "waiting" phases are expressed as
-    # Progress tasks whose descriptions are updated from background threads.
-    #
     console.print(Panel.fit(
         f"[bold cyan]stripdl[/bold cyan] – [dim]{url}[/dim]",
         border_style="cyan",
@@ -309,100 +266,74 @@ def download(
 
             if cp.status == "skipped":
                 if ch not in chapter_tasks:
-                    tid = progress.add_task(
-                        label,
+                    tid = progress.add_task(label,
                         total=max(cp.pages_total, 1),
                         completed=cp.pages_total,
-                        status="[dim]skipped[/dim]",
-                    )
+                        status="[dim]skipped[/dim]")
                     chapter_tasks[ch] = tid
                 return
 
             if cp.status.startswith("rate_limited:"):
                 secs = cp.status.split(":")[1]
                 if ch in chapter_tasks:
-                    progress.update(
-                        chapter_tasks[ch],
-                        status=f"[yellow]rate-limited – waiting {secs}s[/yellow]",
-                    )
+                    progress.update(chapter_tasks[ch],
+                        status=f"[yellow]rate-limited – waiting {secs}s[/yellow]")
                 return
 
             if ch not in chapter_tasks:
-                tid = progress.add_task(
-                    label,
-                    total=max(cp.pages_total, 1),
-                    completed=0,
-                    status="",
-                )
+                tid = progress.add_task(label,
+                    total=max(cp.pages_total, 1), completed=0, status="")
                 chapter_tasks[ch] = tid
                 watchdog.register(ch, tid)
 
             tid = chapter_tasks[ch]
 
             if cp.status == "done":
-                progress.update(
-                    tid,
-                    completed=cp.pages_total,
-                    status="[green]✓ done[/green]",
-                )
+                progress.update(tid, completed=cp.pages_total,
+                    status="[green]✓ done[/green]")
                 watchdog.unregister(ch)
                 if overall_task[0] is not None:
                     progress.advance(overall_task[0], 1)
-
             elif cp.status == "error":
                 progress.update(tid, status="[red]✗ error[/red]")
                 watchdog.unregister(ch)
-
             else:
-                progress.update(
-                    tid,
+                progress.update(tid,
                     completed=cp.pages_done,
                     total=max(cp.pages_total, 1),
-                    status=f"[dim]{cp.pages_done}/{cp.pages_total}[/dim]",
-                )
+                    status=f"[dim]{cp.pages_done}/{cp.pages_total}[/dim]")
 
     with progress:
         watchdog.start()
 
-        # ── Phase 1: series info (background thread + animated desc) ─
-        si_task = progress.add_task(
-            "Connecting…", total=None, completed=0, status="",
-        )
-        si_result, si_error, si_done = _run_in_thread(
-            lambda: parser.get_series_info(url)
-        )
+        # Phase 1: series info
+        si_task = progress.add_task("Connecting…", total=None, completed=0, status="")
+        si_result, si_error, si_done = _run_in_thread(lambda: parser.get_series_info(url))
         _wait_animated(si_done, progress, si_task, "Fetching series info…")
 
         if si_error[0]:
             console.print(f"\n[red]Failed to fetch series info:[/red] {si_error[0]}")
-            watchdog.stop()
-            sys.exit(1)
+            watchdog.stop(); sys.exit(1)
 
         series_info = si_result[0]
-        progress.update(
-            si_task,
+        progress.update(si_task,
             description=f"[bold]{series_info.title}[/bold] by {series_info.author}",
-            total=1, completed=1, status="",
-        )
+            total=1, completed=1, status="")
 
-        # ── Phase 2: chapter list with per-page live counter ──────────
+        # Phase 2: chapter list
         ch_task = progress.add_task(
-            "Fetching chapters…  (connecting)", total=None, completed=0, status="",
-        )
+            "Fetching chapters…  (connecting)", total=None, completed=0, status="")
         try:
             all_chapters = _fetch_chapters_live(parser, url, progress, ch_task)
         except Exception as exc:
             console.print(f"\n[red]Failed to fetch chapter list:[/red] {exc}")
-            watchdog.stop()
-            sys.exit(1)
+            watchdog.stop(); sys.exit(1)
 
-        progress.update(
-            ch_task,
+        progress.update(ch_task,
             description=f"Chapter list  [dim]({len(all_chapters)} total)[/dim]",
-            total=1, completed=1, status="",
-        )
+            total=1, completed=1, status="")
 
-        # ── Filter ───────────────────────────────────────────────────
+        # Filter
         if specific_chapters:
             to_dl = [c for c in all_chapters if int(c.number) in specific_chapters]
         elif chapter_range:
@@ -411,27 +342,22 @@ def download(
         else:
             to_dl = all_chapters
 
+        max_ch = config.get("max_concurrent_chapters", 3)
         console.print(
             f"\n  [cyan]◈[/cyan] [bold]{series_info.title}[/bold]  "
             f"[dim]{series_info.author}[/dim]\n"
-            f"  [dim]{len(all_chapters)} chapters found · "
-            f"{len(to_dl)} queued · "
-            f"saving to {config.download_dir}[/dim]\n"
+            f"  [dim]{len(all_chapters)} chapters found · {len(to_dl)} queued · "
+            f"{max_ch} concurrent · saving to {config.download_dir}[/dim]\n"
         )
 
-        overall_tid = progress.add_task(
-            "[bold white]Overall",
-            total=max(len(to_dl), 1),
-            completed=0,
-            status="",
-        )
+        overall_tid = progress.add_task("[bold white]Overall",
+            total=max(len(to_dl), 1), completed=0, status="")
         overall_task[0] = overall_tid
 
-        # ── Download ─────────────────────────────────────────────────
+        # Phase 3: download
         try:
             series_dir = download_series(
-                parser=parser,
-                url=url,
+                parser=parser, url=url,
                 chapter_range=chapter_range,
                 specific_chapters=specific_chapters,
                 json_progress=False,
@@ -439,12 +365,10 @@ def download(
             )
         except RuntimeError as e:
             console.print(f"\n[red bold]✗ {e}[/red bold]")
-            watchdog.stop()
-            sys.exit(1)
+            watchdog.stop(); sys.exit(1)
         except Exception as e:
             console.print(f"\n[red]Download failed:[/red] {e}")
-            watchdog.stop()
-            sys.exit(1)
+            watchdog.stop(); sys.exit(1)
 
         watchdog.stop()
 
@@ -462,8 +386,7 @@ def list_chapters(url: str):
     try:
         parser = get_parser(url)
     except ValueError as e:
-        console.print(f"[red]{e}[/red]")
-        sys.exit(1)
+        console.print(f"[red]{e}[/red]"); sys.exit(1)
 
     with console.status("Fetching series info…"):
         info = parser.get_series_info(url)
@@ -477,15 +400,12 @@ def list_chapters(url: str):
         f"[dim]Genre:[/dim]  {info.genre or '—'}",
         title="Series Info", border_style="cyan",
     ))
-
     table = Table(box=box.SIMPLE_HEAD, show_edge=False)
     table.add_column("#",    style="cyan", width=6, justify="right")
     table.add_column("Title")
     table.add_column("Date", style="dim",  width=12)
-
     for ch in chapters:
         table.add_row(str(int(ch.number)), ch.title, ch.date)
-
     console.print(table)
     console.print(f"\n[dim]Total: {len(chapters)} chapters[/dim]")
 
@@ -498,7 +418,6 @@ def list_chapters(url: str):
 def library():
     """Show all locally downloaded series."""
     series_list = scan_library()
-
     if not series_list:
         console.print(
             f"[yellow]Library is empty.[/yellow]\n"
@@ -506,16 +425,13 @@ def library():
             f"Library location:   {config.download_dir}"
         )
         return
-
     table = Table(title="Local Library", box=box.ROUNDED, show_edge=True)
     table.add_column("Title",    style="bold")
     table.add_column("Author",   style="dim")
     table.add_column("Chapters", justify="right", style="cyan")
     table.add_column("Location", style="dim")
-
     for s in series_list:
         table.add_row(s.title, s.author or "—", str(s.chapter_count), str(s.directory))
-
     console.print(table)
 
 
@@ -524,12 +440,11 @@ def library():
 # ────────────────────────────────────────────────────────────────────
 
 @cli.command(name="config")
-@click.option("--set",   "set_kv",  metavar="KEY=VALUE", help="Set a config value.")
-@click.option("--get",   "get_key", metavar="KEY",        help="Get a config value.")
-@click.option("--reset", is_flag=True,                    help="Reset config to defaults.")
+@click.option("--set",   "set_kv",  metavar="KEY=VALUE")
+@click.option("--get",   "get_key", metavar="KEY")
+@click.option("--reset", is_flag=True)
 def config_cmd(set_kv: Optional[str], get_key: Optional[str], reset: bool):
     """View or edit stripdl configuration."""
-
     if reset:
         import copy
         from strip.config import _DEFAULTS
@@ -537,30 +452,23 @@ def config_cmd(set_kv: Optional[str], get_key: Optional[str], reset: bool):
         config.save()
         console.print("[green]Config reset to defaults.[/green]")
         return
-
     if set_kv:
         if "=" not in set_kv:
-            console.print("[red]Use KEY=VALUE format[/red]")
-            sys.exit(1)
+            console.print("[red]Use KEY=VALUE format[/red]"); sys.exit(1)
         k, v = set_kv.split("=", 1)
         for cast in (int, float):
             try: v = cast(v); break
             except ValueError: pass
         if v in ("true",  "True"):  v = True
         if v in ("false", "False"): v = False
-        config[k] = v
-        config.save()
+        config[k] = v; config.save()
         console.print(f"[green]Set[/green] {k} = {v}")
         return
-
     if get_key:
         val = config.get(get_key)
-        console.print(
-            f"{get_key} = {val}" if val is not None
-            else f"[yellow]Key '{get_key}' not found[/yellow]"
-        )
+        console.print(f"{get_key} = {val}" if val is not None
+                      else f"[yellow]Key '{get_key}' not found[/yellow]")
         return
-
     table = Table(title="stripdl Configuration", box=box.SIMPLE)
     table.add_column("Key",   style="bold cyan")
     table.add_column("Value")
