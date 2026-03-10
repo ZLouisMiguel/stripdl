@@ -1,25 +1,19 @@
 # strip/parsers/webtoons.py
 # Parser for https://www.webtoons.com
 #
-# How Webtoons works (as of 2024-2025):
-#   - Series pages:  /en/<genre>/<slug>/list?title_no=<id>
-#   - Chapter pages: /en/<genre>/<slug>/ep-<n>/viewer?title_no=<id>&episode_no=<n>
-#   - Images live on webtoon-phinf.pstatic.net CDN and REQUIRE a Referer header
-#     pointing to the episode viewer URL – without it you get a 403.
-#   - The chapter list is paginated; each page holds up to 10 episodes.
-#     Query param: ?title_no=<id>&page=<n>
-#   - All images are inside  #_imageList img  (data-url attribute, not src).
-#
-# Cover image note:
-#   The correct series cover is found inside  .detail_header  on the /list page.
-#   It is NOT the thumbnail from episode rows (.detail_lst li img), which only
-#   shows a per-episode preview.  We try several selectors in priority order and
-#   validate that the URL contains "EpisodeList" or similar keywords that are
-#   characteristic of the series banner — falling back gracefully if none match.
+# v2 changes:
+#   - _fetch_chapter_page() unchanged (single page fetch).
+#   - get_chapter_list() now fetches pages concurrently (wave strategy):
+#       1. Fetch page 1 serially to determine whether more pages exist.
+#       2. Speculatively fetch pages 2, 3, 4… in batches of CONCURRENT_PAGES.
+#       3. Stop when a batch page returns fewer than 10 items.
+#   - Minimum inter-request delay still enforced via the global token bucket
+#     (set in config.rate_limit), so no separate _DELAY is needed here.
 
 import re
 import time
-from typing import List
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from typing import List, Optional
 from urllib.parse import urlparse, parse_qs, urlencode, urlunparse
 
 import requests
@@ -27,7 +21,6 @@ from bs4 import BeautifulSoup
 
 from strip.parsers.base import SiteParser, SeriesInfo, ChapterInfo
 
-# Webtoons blocks requests without a realistic browser UA
 _UA = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
     "AppleWebKit/537.36 (KHTML, like Gecko) "
@@ -39,75 +32,103 @@ _BASE_HEADERS = {
     "Accept-Language": "en-US,en;q=0.9",
 }
 
-# Polite delay between page requests (series info / chapter list fetches)
-_DELAY = 0.8
+# Minimum seconds between page-list requests on the same thread.
+# The global token bucket handles cross-thread rate limiting;
+# this is an additional per-thread floor.
+_PAGE_DELAY = 0.3
+
+# Pages to fetch concurrently when paginating the chapter list.
+_CONCURRENT_PAGES = 3
 
 
 def _get(url: str, headers: dict = None, **kwargs) -> requests.Response:
     h = {**_BASE_HEADERS, **(headers or {})}
     resp = requests.get(url, headers=h, timeout=20, **kwargs)
     resp.raise_for_status()
-    time.sleep(_DELAY)
     return resp
 
 
 def _soup(url: str, headers: dict = None) -> BeautifulSoup:
+    time.sleep(_PAGE_DELAY)   # polite per-thread delay
     return BeautifulSoup(_get(url, headers).text, "lxml")
 
 
 def _normalize_url(url: str) -> str:
-    """
-    Accept both the /list?title_no=… URL and the /viewer URL and
-    always return the canonical list URL.
-    """
+    """Accept /viewer or /list URLs and return the canonical /list URL."""
     if "viewer" in url:
-        parsed = urlparse(url)
-        qs = parse_qs(parsed.query)
+        parsed  = urlparse(url)
+        qs      = parse_qs(parsed.query)
         title_no = qs.get("title_no", [""])[0]
-        parts = parsed.path.rstrip("/").split("/")
+        parts   = parsed.path.rstrip("/").split("/")
         parts[-1] = "list"
-        new_path = "/".join(parts)
+        new_path  = "/".join(parts)
         new_query = urlencode({"title_no": title_no})
         return urlunparse(parsed._replace(path=new_path, query=new_query))
     return url
 
 
 def _extract_cover_url(soup: BeautifulSoup) -> str:
-    """
-    Extract the series cover image URL from the /list page.
-
-    Priority order (most to least reliable):
-      1.  .detail_header .thmb img            – main character/series art banner
-      2.  .detail_header img[class*="thmb"]   – alternate attribute variant
-      3.  .thmb img[alt]  outside .detail_lst – avoid episode thumbnails
-      4.  og:image meta tag                   – OpenGraph fallback
-
-    We explicitly ignore any <img> that lives inside  #_listUl  or  .detail_lst
-    because those are per-episode thumbnails, not the series cover.
-    """
-    # Selectors tried in order; each must NOT be inside the episode list
+    """Extract series cover; avoids episode-thumbnail false positives."""
     candidate_selectors = [
         ".detail_header .thmb img",
         ".detail_header img",
         ".info_img img",
         ".thmb_wrap img",
     ]
-
     for sel in candidate_selectors:
         for el in soup.select(sel):
-            # Skip if the element is nested inside the episode list
             if el.find_parent(id="_listUl") or el.find_parent(class_="detail_lst"):
                 continue
             src = el.get("src") or el.get("data-src") or ""
             if src.startswith("http") and "pstatic.net" in src:
                 return src
-
-    # OpenGraph image as last resort (usually correct series banner)
     og = soup.select_one("meta[property='og:image']")
     if og:
         return og.get("content", "")
-
     return ""
+
+
+def _page_url(list_url: str, page: int) -> str:
+    parsed = urlparse(list_url)
+    qs = parse_qs(parsed.query)
+    qs["page"] = [str(page)]
+    return urlunparse(parsed._replace(query=urlencode({k: v[0] for k, v in qs.items()})))
+
+
+def _parse_items(soup: BeautifulSoup) -> List[ChapterInfo]:
+    """Parse chapter items from a /list page soup."""
+    items = soup.select("#_listUl li") or soup.select(".detail_lst li")
+    chapters = []
+    for li in items:
+        if li.select_one(".ico_lock"):
+            continue
+        a_el = li.select_one("a")
+        if not a_el:
+            continue
+        chapter_url = a_el.get("href", "")
+        if not chapter_url.startswith("http"):
+            chapter_url = "https://www.webtoons.com" + chapter_url
+
+        ep_qs  = parse_qs(urlparse(chapter_url).query)
+        ep_no  = float(ep_qs.get("episode_no", ["0"])[0])
+
+        title_el = li.select_one(".subj span") or li.select_one(".subj")
+        title    = title_el.get_text(strip=True) if title_el else f"Episode {ep_no}"
+
+        date_el  = li.select_one(".date")
+        date     = date_el.get_text(strip=True) if date_el else ""
+
+        thumb_el      = li.select_one("img")
+        thumbnail_url = ""
+        if thumb_el:
+            thumbnail_url = thumb_el.get("data-url") or thumb_el.get("src") or ""
+
+        chapters.append(ChapterInfo(
+            number=ep_no, title=title,
+            url=chapter_url, date=date,
+            thumbnail_url=thumbnail_url,
+        ))
+    return chapters
 
 
 class WebtoonsParser(SiteParser):
@@ -125,150 +146,121 @@ class WebtoonsParser(SiteParser):
 
     def get_series_info(self, url: str) -> SeriesInfo:
         list_url = _normalize_url(url)
-        soup = _soup(list_url)
+        soup     = _soup(list_url)
 
-        # ---- title
-        title_el = soup.select_one("h1.subj") or soup.select_one(".info .subj")
-        title = title_el.get_text(strip=True) if title_el else "Unknown"
+        title_el  = soup.select_one("h1.subj") or soup.select_one(".info .subj")
+        title     = title_el.get_text(strip=True) if title_el else "Unknown"
 
-        # ---- author
-        author_el = (
-            soup.select_one(".author_area .author")
-            or soup.select_one(".author")
-        )
-        author = author_el.get_text(strip=True) if author_el else ""
-        author = re.sub(r"\s+author info.*", "", author, flags=re.I).strip()
+        author_el = (soup.select_one(".author_area .author")
+                     or soup.select_one(".author"))
+        author    = author_el.get_text(strip=True) if author_el else ""
+        author    = re.sub(r"\s+author info.*", "", author, flags=re.I).strip()
 
-        # ---- description
-        desc_el = soup.select_one(".summary") or soup.select_one(".desc")
+        desc_el   = soup.select_one(".summary") or soup.select_one(".desc")
         description = desc_el.get_text(strip=True) if desc_el else ""
 
-        # ---- cover image (series banner, NOT episode thumbnail)
         cover_url = _extract_cover_url(soup)
 
-        # ---- genre (from URL path)
-        parsed = urlparse(list_url)
+        parsed     = urlparse(list_url)
         path_parts = parsed.path.strip("/").split("/")
-        genre = path_parts[1] if len(path_parts) > 1 else ""
+        genre      = path_parts[1] if len(path_parts) > 1 else ""
 
-        # ---- status badge
-        status_el = soup.select_one(".comic_info .day_info") or soup.select_one(
-            ".info .day_info"
-        )
-        status = status_el.get_text(strip=True).lower() if status_el else ""
+        status_el = (soup.select_one(".comic_info .day_info")
+                     or soup.select_one(".info .day_info"))
+        status    = status_el.get_text(strip=True).lower() if status_el else ""
 
         return SeriesInfo(
-            title=title,
-            author=author,
-            description=description,
-            cover_url=cover_url,
-            url=list_url,
-            genre=genre,
-            status=status,
+            title=title, author=author, description=description,
+            cover_url=cover_url, url=list_url, genre=genre, status=status,
         )
 
     # ------------------------------------------------------------------ chapter list
 
     def _fetch_chapter_page(self, url: str, page: int) -> List[ChapterInfo]:
         """
-        Fetch one pagination page of the chapter list (10 items max).
+        Fetch one pagination page of the chapter list.
         Returns an empty list when there are no more pages.
-
-        Exposed separately so the CLI can call it in a loop and update a
-        live progress counter after each page arrives, giving the user
-        real-time feedback:  "Fetching chapters…  page 3  (27 found)"
+        Called by the CLI to power live per-page progress display.
         """
         list_url = _normalize_url(url)
-        parsed   = urlparse(list_url)
-        qs       = parse_qs(parsed.query)
-        qs["page"] = [str(page)]
-        page_url = urlunparse(
-            parsed._replace(query=urlencode({k: v[0] for k, v in qs.items()}))
-        )
-
-        soup  = _soup(page_url)
-        items = soup.select("#_listUl li") or soup.select(".detail_lst li")
-        if not items:
-            return []
-
-        chapters: List[ChapterInfo] = []
-        for li in items:
-            if li.select_one(".ico_lock"):
-                continue
-
-            a_el = li.select_one("a")
-            if not a_el:
-                continue
-
-            chapter_url = a_el.get("href", "")
-            if not chapter_url.startswith("http"):
-                chapter_url = "https://www.webtoons.com" + chapter_url
-
-            ep_qs = parse_qs(urlparse(chapter_url).query)
-            ep_no = float(ep_qs.get("episode_no", ["0"])[0])
-
-            title_el = li.select_one(".subj span") or li.select_one(".subj")
-            title    = title_el.get_text(strip=True) if title_el else f"Episode {ep_no}"
-
-            date_el = li.select_one(".date")
-            date    = date_el.get_text(strip=True) if date_el else ""
-
-            # Thumbnail: episode-level preview (NOT used as series cover)
-            thumb_el      = li.select_one("img")
-            thumbnail_url = ""
-            if thumb_el:
-                thumbnail_url = (
-                    thumb_el.get("data-url") or thumb_el.get("src") or ""
-                )
-
-            chapters.append(ChapterInfo(
-                number=ep_no, title=title,
-                url=chapter_url, date=date,
-                thumbnail_url=thumbnail_url,
-            ))
-
-        return chapters
+        soup     = _soup(_page_url(list_url, page))
+        return _parse_items(soup)
 
     def get_chapter_list(self, url: str) -> List[ChapterInfo]:
-        """Return the full sorted chapter list.  Uses _fetch_chapter_page internally."""
-        chapters: List[ChapterInfo] = []
-        page = 1
-        while True:
-            items = self._fetch_chapter_page(url, page)
-            if not items:
-                break
-            chapters.extend(items)
-            if len(items) < 10:
-                break
-            page += 1
-        chapters.sort(key=lambda c: c.number)
-        return chapters
+        """
+        Return full sorted chapter list, fetching pages concurrently.
+
+        Strategy (wave-based):
+          1. Fetch page 1 (serial) — establishes whether more pages exist.
+          2. While last batch had any full pages (10 items), concurrently
+             fetch the next CONCURRENT_PAGES pages.
+          3. Merge results, sort ascending by chapter number.
+        """
+        list_url  = _normalize_url(url)
+        all_chaps: List[ChapterInfo] = []
+
+        # Page 1 — serial, to check if series has more pages at all
+        p1_items = self._fetch_chapter_page(url, 1)
+        all_chaps.extend(p1_items)
+
+        if len(p1_items) < 10:
+            # Single page series — done
+            all_chaps.sort(key=lambda c: c.number)
+            return all_chaps
+
+        # Multi-page series — fetch remaining pages in batches
+        next_page = 2
+        with ThreadPoolExecutor(max_workers=_CONCURRENT_PAGES) as pool:
+            while True:
+                batch = list(range(next_page, next_page + _CONCURRENT_PAGES))
+                next_page += _CONCURRENT_PAGES
+
+                futures = {
+                    pool.submit(self._fetch_chapter_page, url, p): p
+                    for p in batch
+                }
+
+                batch_results: dict = {}
+                for fut in as_completed(futures):
+                    p = futures[fut]
+                    try:
+                        batch_results[p] = fut.result()
+                    except Exception:
+                        batch_results[p] = []
+
+                # Process pages in order so we can stop cleanly
+                done = False
+                for p in sorted(batch_results.keys()):
+                    items = batch_results[p]
+                    all_chaps.extend(items)
+                    if len(items) < 10:
+                        done = True
+                        break
+
+                if done:
+                    break
+
+        all_chaps.sort(key=lambda c: c.number)
+        return all_chaps
 
     # ------------------------------------------------------------------ images
 
     def get_chapter_images(self, chapter_url: str) -> List[str]:
-        """
-        Images are inside  #_imageList img  with the real URL in data-url.
-        The CDN requires Referer = the chapter viewer URL.
-        """
-        soup = _soup(chapter_url)
-
+        soup   = _soup(chapter_url)
         images = []
         for img in soup.select("#_imageList img"):
             src = img.get("data-url") or img.get("src") or ""
             if src and src.startswith("http"):
                 images.append(src)
-
         if not images:
             for img in soup.select(".viewer_lst img"):
                 src = img.get("data-url") or img.get("src") or ""
                 if src and src.startswith("http"):
                     images.append(src)
-
         return images
 
     def get_image_headers(self) -> dict:
         return {
-            "Referer": "https://www.webtoons.com/",
+            "Referer":    "https://www.webtoons.com/",
             "User-Agent": _UA,
         }
