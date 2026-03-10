@@ -432,8 +432,6 @@ body {
   line-height: 1.3;
   overflow: hidden;
   display: -webkit-box;
-  -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;
   transition: color 0.15s;
 }
 .series-card:hover .series-card-title {
@@ -562,8 +560,6 @@ body {
   margin-bottom: 18px;
   max-width: 520px;
   display: -webkit-box;
-  -webkit-line-clamp: 4;
-  -webkit-box-orient: vertical;
   overflow: hidden;
 }
 
