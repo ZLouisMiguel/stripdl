@@ -92,17 +92,20 @@ class SeriesLock:
     def acquire(self) -> bool:
         """Try to acquire. Returns False if already locked by another process."""
         try:
+            # Exclusive creation – atomic on POSIX and Windows
             fd = os.open(str(self._path), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
             os.write(fd, str(os.getpid()).encode())
             os.close(fd)
             self._acquired = True
             return True
         except FileExistsError:
+            # Check if the owning PID is still alive
             try:
                 pid = int(self._path.read_text().strip())
-                os.kill(pid, 0)
-                return False
+                os.kill(pid, 0)   # signal 0 = just check existence
+                return False      # process alive → locked
             except (ProcessLookupError, ValueError, OSError):
+                # Stale lock – steal it
                 self._path.write_text(str(os.getpid()))
                 self._acquired = True
                 return True
@@ -197,7 +200,7 @@ def _purge_partial_chapter(ch_dir: Path):
 
 
 # ─────────────────────────────────────────────────────────────────────
-#  Cover download
+#  Cover download – uses the series-level cover_url from SeriesInfo
 # ─────────────────────────────────────────────────────────────────────
 
 def _download_cover(cover_url: str, series_dir: Path, headers: dict):
@@ -237,6 +240,7 @@ def download_chapter(
     ch_dir = series_dir / f"{int(chapter.number):03d}"
     ch_dir.mkdir(parents=True, exist_ok=True)
 
+    # Write / overwrite chapter metadata (lightweight, always safe)
     with open(ch_dir / "metadata.json", "w") as f:
         json.dump(
             {"number": chapter.number, "title": chapter.title,
@@ -269,6 +273,8 @@ def download_chapter(
 
     completed = 0
     lock = threading.Lock()
+
+    # Rate-limit signal passed from image threads back to the progress display
     _rate_limited_until = [0.0]
 
     def _on_rate_limited(wait_secs: int):
@@ -295,6 +301,7 @@ def download_chapter(
                    "page": done, "total_pages": total,
                    "percent": round(done / total * 100)})
         if progress_cb and _rate_limited_until[0] < time.time():
+            # Only send normal progress updates when not in a rate-limit wait
             progress_cb(ChapterProgress(
                 chapter.number, chapter.title, done, total))
 
@@ -303,7 +310,7 @@ def download_chapter(
         futures = [pool.submit(_dl_one, (i, u))
                    for i, u in enumerate(image_urls, start=1)]
         for fut in as_completed(futures):
-            fut.result()
+            fut.result()   # re-raise any unhandled exception
 
     # Mark chapter complete
     (ch_dir / _SENTINEL).write_text(
@@ -334,7 +341,7 @@ def download_series(
     """
     Download a full series or a filtered subset.
 
-    Chapters are downloaded sequentially (one at a time) to respect
+    Chapters are downloaded **sequentially** (one at a time) to respect
     rate limits and avoid two terminals stomping over each other.
     Images within each chapter are still downloaded concurrently.
 
@@ -354,6 +361,7 @@ def download_series(
     series_dir = config.ensure_download_dir() / safe_title
     series_dir.mkdir(parents=True, exist_ok=True)
 
+    # Acquire per-series lock ─────────────────────────────────────────
     lock = SeriesLock(safe_title)
     if not lock.acquire():
         msg = (
@@ -383,9 +391,16 @@ def download_series(
 
 
 def _do_download(
-    parser, url, series_info, series_dir,
-    chapter_range, specific_chapters, json_progress, progress_cb,
+    parser,
+    url,
+    series_info,
+    series_dir,
+    chapter_range,
+    specific_chapters,
+    json_progress,
+    progress_cb,
 ):
+    # Write / refresh series metadata
     with open(series_dir / "metadata.json", "w") as f:
         json.dump(
             {"title": series_info.title, "author": series_info.author,
@@ -396,6 +411,7 @@ def _do_download(
             f, indent=2, ensure_ascii=False,
         )
 
+    # Download cover using the series-level URL (NOT episode thumbnails)
     _download_cover(series_info.cover_url, series_dir, parser.get_image_headers())
 
     if json_progress:
@@ -406,6 +422,7 @@ def _do_download(
     if json_progress:
         _emit({"status": "chapter_list", "total": len(all_chapters)})
 
+    # Filter
     if specific_chapters:
         chapters = [c for c in all_chapters if int(c.number) in specific_chapters]
     elif chapter_range:
@@ -419,11 +436,13 @@ def _do_download(
             _emit({"status": "error", "message": "No chapters matched the filter."})
         return series_dir
 
+    # Identify which chapters actually need downloading (resume logic)
     to_download: List[ChapterInfo] = []
     for chapter in chapters:
         ch_dir = series_dir / f"{int(chapter.number):03d}"
         sentinel = ch_dir / _SENTINEL
         if sentinel.exists() and not config.get("overwrite", False):
+            # Already fully downloaded – emit skipped immediately
             existing = len(list(ch_dir.glob("*.jpg")))
             if json_progress:
                 _emit({"status": "skipped", "chapter": chapter.number,
@@ -446,6 +465,7 @@ def _do_download(
                    "directory": str(series_dir)})
         return series_dir
 
+    # Inter-chapter delay (rate-limit courtesy)
     chapter_delay = config.get("chapter_delay", 1.5)
 
     for idx, chapter in enumerate(to_download):
@@ -466,6 +486,7 @@ def _do_download(
                 progress_cb(ChapterProgress(
                     chapter.number, chapter.title, 0, 0, status="error"))
 
+        # Polite inter-chapter delay (skip after last chapter)
         if idx < len(to_download) - 1 and chapter_delay > 0:
             if json_progress:
                 _emit({"status": "chapter_delay", "seconds": chapter_delay})
