@@ -1,27 +1,47 @@
-# strip/downloader.py
-# Orchestrates downloading a series or individual chapters.
+# strip/downloader.py  — patched
 #
-# v2 changes:
-#   - Global token-bucket rate limiter shared across all download threads.
-#   - Chapters downloaded concurrently within a series (ThreadPoolExecutor).
-#   - Partial chapter resume: keeps already-downloaded images, fetches only missing ones.
-#   - Optional SHA-256 integrity check per image (manifest.json in chapter dir).
-#   - Metadata caching: reads local metadata.json if younger than cache_ttl_days.
-#   - Progress events carry chapter_id so Electron can track multiple active chapters.
+# What changed and why:
+#
+#   PROBLEM: _do_download() called parser.get_chapter_list() which blocked
+#            until every chapter-list page was fetched before a single
+#            download could start.  The CLI also pre-fetched the same list
+#            in _fetch_chapters_live, so every page was fetched twice.
+#
+#   FIX: _do_download() now runs a background "fetcher" thread that calls
+#        parser.iter_chapter_list() and pushes each ChapterInfo into a
+#        queue.Queue as it arrives.  A ThreadPoolExecutor pulls from the
+#        queue and starts download_chapter() immediately — chapter 1 starts
+#        downloading while pages 2, 3, 4 … of the chapter list are still
+#        being fetched.  The chapter list is fetched exactly ONCE.
+#
+#   PROBLEM: download_series() was called by the CLI *after* the CLI already
+#            fetched the full list, meaning two full scans per run.
+#   FIX: The CLI's download command now calls download_series() directly
+#        without pre-fetching, relying on progress callbacks that fire for
+#        each discovered chapter (status="chapter_found") and when discovery
+#        is complete (status="fetch_done").  cli.py updated accordingly.
+#
+#   PROBLEM: Image downloads used bare requests.get() — no connection-level
+#            retry.  One dropped TCP connection = permanent failure.
+#   FIX: A dedicated _img_session with HTTPAdapter(Retry(...)) is used for
+#        all image and cover downloads.
 
 import hashlib
 import json
 import os
+import queue
 import re
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Dict, List, Optional
 from io import BytesIO
 
 import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 from PIL import Image
 
 from strip.config import config
@@ -39,57 +59,60 @@ def _sanitize(name: str) -> str:
 
 
 def _emit(obj: dict):
-    """Print one JSON line to stdout (Electron subprocess mode)."""
     print(json.dumps(obj), flush=True)
 
 
 # ─────────────────────────────────────────────────────────────────────
-#  Token-bucket rate limiter
+#  Dedicated image-download session  (CDN, separate from parser session)
+# ─────────────────────────────────────────────────────────────────────
+
+_img_retry = Retry(
+    total=5,
+    connect=3,
+    read=3,
+    backoff_factor=1,
+    status_forcelist={429, 500, 502, 503, 504},
+    raise_on_status=False,
+    respect_retry_after_header=True,
+)
+_img_session = requests.Session()
+_img_session.mount("https://", HTTPAdapter(max_retries=_img_retry))
+_img_session.mount("http://",  HTTPAdapter(max_retries=_img_retry))
+
+
+# ─────────────────────────────────────────────────────────────────────
+#  Token-bucket rate limiter  (CDN image downloads only)
 # ─────────────────────────────────────────────────────────────────────
 
 class TokenBucket:
-    """
-    Thread-safe token bucket.  Each `acquire()` call blocks until a token
-    is available, then consumes one token.  Set rate=0 to disable limiting.
-    """
-
     def __init__(self, rate: float):
-        self._rate = rate          # tokens per second; 0 = unlimited
-        self._tokens = rate        # start full
-        self._last = time.monotonic()
-        self._lock = threading.Lock()
-
-    def update_rate(self, rate: float):
-        with self._lock:
-            self._rate = rate
+        self._rate   = rate
+        self._tokens = float(rate)
+        self._last   = time.monotonic()
+        self._lock   = threading.Lock()
 
     def acquire(self, tokens: float = 1.0):
-        """Block until *tokens* tokens are available."""
         if self._rate <= 0:
             return
         with self._lock:
             now = time.monotonic()
-            elapsed = now - self._last
-            self._tokens = min(self._rate, self._tokens + elapsed * self._rate)
+            self._tokens = min(self._rate,
+                               self._tokens + (now - self._last) * self._rate)
             self._last = now
             if self._tokens >= tokens:
                 self._tokens -= tokens
                 return
-            # Need to wait
             deficit = tokens - self._tokens
             wait = deficit / self._rate
             self._tokens = 0
             self._last = now + wait
-        # Sleep outside the lock so other threads can be refilled
         time.sleep(wait)
 
     def penalize(self, seconds: float):
-        """Drain the bucket by the equivalent of *seconds* worth of tokens."""
         with self._lock:
             self._tokens = max(0.0, self._tokens - seconds * self._rate)
 
 
-# Process-global bucket (one per `download_series` call; recreated each time)
 _bucket: Optional[TokenBucket] = None
 _bucket_lock = threading.Lock()
 
@@ -109,7 +132,7 @@ def _reset_bucket():
 
 
 # ─────────────────────────────────────────────────────────────────────
-#  Progress callback dataclass
+#  Progress callback
 # ─────────────────────────────────────────────────────────────────────
 
 @dataclass
@@ -119,13 +142,19 @@ class ChapterProgress:
     pages_done:     int
     pages_total:    int
     status: str = "downloading"
-    # status values:
-    #   "downloading" | "done" | "skipped" | "error"
-    #   "rate_limited:<secs>" | "retrying"
+    # status values used by the CLI / Electron:
+    #   "downloading"    — normal image-download tick
+    #   "done"           — chapter finished
+    #   "skipped"        — already downloaded
+    #   "error"          — download failed
+    #   "rate_limited:N" — waiting N seconds
+    #   "chapter_found"  — discovery: a new chapter arrived from the list fetcher
+    #                      pages_done = running discovery count so far
+    #   "fetch_done"     — all chapter-list pages have been fetched
+    #                      pages_done = total chapters discovered
 
     @property
     def chapter_id(self) -> float:
-        """Alias used in JSON / Electron IPC."""
         return self.chapter_number
 
 
@@ -133,18 +162,16 @@ ProgressCallback = Callable[[ChapterProgress], None]
 
 
 # ─────────────────────────────────────────────────────────────────────
-#  Per-series lock
+#  Per-series file lock
 # ─────────────────────────────────────────────────────────────────────
 
 _LOCK_DIR = Path.home() / ".strip" / "locks"
 
 
 class SeriesLock:
-    """File-based lock scoped to a series directory name."""
-
     def __init__(self, safe_title: str):
         _LOCK_DIR.mkdir(parents=True, exist_ok=True)
-        self._path = _LOCK_DIR / f"{safe_title}.lock"
+        self._path     = _LOCK_DIR / f"{safe_title}.lock"
         self._acquired = False
 
     def acquire(self) -> bool:
@@ -175,8 +202,7 @@ class SeriesLock:
         if not self.acquire():
             raise RuntimeError(
                 f"Another stripdl process is already downloading this series. "
-                f"Lock: {self._path}"
-            )
+                f"Lock: {self._path}")
         return self
 
     def __exit__(self, *_):
@@ -184,11 +210,11 @@ class SeriesLock:
 
 
 # ─────────────────────────────────────────────────────────────────────
-#  Image download with retry + token-bucket + back-off
+#  Image download
 # ─────────────────────────────────────────────────────────────────────
 
-_RETRY_STATUSES   = {429, 503, 502, 500}
-_MAX_IMG_RETRIES  = 4
+_RETRY_STATUSES  = {429, 503, 502, 500}
+_MAX_IMG_RETRIES = 4
 
 
 def _sha256_file(path: Path) -> str:
@@ -199,51 +225,29 @@ def _sha256_file(path: Path) -> str:
     return h.hexdigest()
 
 
-def _download_image(
-    url: str,
-    dest: Path,
-    headers: dict,
-    quality: int = 85,
-    rate_limited_cb: Optional[Callable[[int], None]] = None,
-    expected_hash: Optional[str] = None,
-) -> bool:
-    """
-    Download a single image.
-
-    - Acquires a token-bucket token before every HTTP request.
-    - Retries on 429/5xx with exponential back-off.
-    - If *expected_hash* is provided, verifies SHA-256 after download.
-    - Skips download if dest exists, is non-empty, and hash matches (or no hash given).
-    """
+def _download_image(url, dest, headers, quality=85,
+                    rate_limited_cb=None, expected_hash=None) -> bool:
     bucket = _get_bucket()
 
-    # Skip if already downloaded and hash matches
     if dest.exists() and dest.stat().st_size > 0:
         if expected_hash is None:
             return True
         if _sha256_file(dest) == expected_hash:
             return True
-        # Hash mismatch — re-download below
         dest.unlink(missing_ok=True)
 
     delay = 2.0
     for attempt in range(_MAX_IMG_RETRIES):
         try:
             bucket.acquire()
-            resp = requests.get(url, headers=headers, timeout=30)
+            resp = _img_session.get(url, headers=headers, timeout=(10, 45))
 
             if resp.status_code in _RETRY_STATUSES:
-                # Honour Retry-After if server provides it
-                retry_after = resp.headers.get("Retry-After")
-                wait: float
-                if retry_after:
-                    try:
-                        wait = float(retry_after)
-                    except ValueError:
-                        wait = delay * (2 ** attempt)
-                else:
+                raw = resp.headers.get("Retry-After")
+                try:
+                    wait = float(raw) if raw else delay * (2 ** attempt)
+                except (ValueError, TypeError):
                     wait = delay * (2 ** attempt)
-
                 bucket.penalize(wait)
                 if rate_limited_cb:
                     rate_limited_cb(int(wait))
@@ -251,7 +255,6 @@ def _download_image(
                 continue
 
             resp.raise_for_status()
-
             img = Image.open(BytesIO(resp.content)).convert("RGB")
             img.save(dest, "JPEG", quality=quality, optimize=True)
             return True
@@ -273,8 +276,7 @@ _SENTINEL = ".complete"
 _MANIFEST = "manifest.json"
 
 
-def _load_manifest(ch_dir: Path) -> Dict[str, str]:
-    """Load {filename: sha256} manifest from chapter dir, if it exists."""
+def _load_manifest(ch_dir: Path) -> dict:
     m = ch_dir / _MANIFEST
     if m.exists():
         try:
@@ -284,42 +286,29 @@ def _load_manifest(ch_dir: Path) -> Dict[str, str]:
     return {}
 
 
-def _save_manifest(ch_dir: Path, hashes: Dict[str, str], total_pages: int):
-    m = ch_dir / _MANIFEST
-    m.write_text(json.dumps({"pages": total_pages, "hashes": hashes,
-                             "timestamp": time.time()}))
+def _save_manifest(ch_dir, hashes, total_pages):
+    (ch_dir / _MANIFEST).write_text(json.dumps(
+        {"pages": total_pages, "hashes": hashes, "timestamp": time.time()}))
 
 
 def _chapter_is_complete(ch_dir: Path, expected_pages: int) -> bool:
-    sentinel = ch_dir / _SENTINEL
-    if not sentinel.exists():
+    if not (ch_dir / _SENTINEL).exists():
         return False
-    existing = len(list(ch_dir.glob("*.jpg")))
-    return existing >= expected_pages
+    return len(list(ch_dir.glob("*.jpg"))) >= expected_pages
 
 
-def _missing_images(
-    ch_dir: Path,
-    image_urls: List[str],
-    chapter: ChapterInfo,
-    verify: bool,
-) -> List[tuple]:
-    """
-    Return list of (index, url, dest, expected_hash) for images that still need
-    downloading.  With partial-resume: only missing or hash-failed images are returned.
-    """
+def _missing_images(ch_dir, image_urls, chapter, verify):
     manifest = _load_manifest(ch_dir) if verify else {}
     missing = []
     for i, url in enumerate(image_urls, start=1):
         fname = f"{int(chapter.number):03d}_{i:03d}.jpg"
         dest  = ch_dir / fname
         expected_hash = manifest.get("hashes", {}).get(fname) if verify else None
-
         if dest.exists() and dest.stat().st_size > 0:
             if not verify:
-                continue   # already downloaded, skip
+                continue
             if expected_hash and _sha256_file(dest) == expected_hash:
-                continue   # verified, skip
+                continue
         missing.append((i, url, dest, expected_hash))
     return missing
 
@@ -328,16 +317,14 @@ def _missing_images(
 #  Cover download
 # ─────────────────────────────────────────────────────────────────────
 
-def _download_cover(cover_url: str, series_dir: Path, headers: dict):
+def _download_cover(cover_url, series_dir, headers):
     if not cover_url:
         return
     dest = series_dir / "cover.jpg"
     if dest.exists() and dest.stat().st_size > 0:
         return
-    bucket = _get_bucket()
     try:
-        bucket.acquire()
-        resp = requests.get(cover_url, headers=headers, timeout=20)
+        resp = _img_session.get(cover_url, headers=headers, timeout=(10, 30))
         resp.raise_for_status()
         img = Image.open(BytesIO(resp.content)).convert("RGB")
         img.save(dest, "JPEG", quality=90, optimize=True)
@@ -350,30 +337,20 @@ def _download_cover(cover_url: str, series_dir: Path, headers: dict):
 # ─────────────────────────────────────────────────────────────────────
 
 def download_chapter(
-    parser:        SiteParser,
-    chapter:       ChapterInfo,
-    series_dir:    Path,
-    quality:       int  = 85,
-    json_progress: bool = False,
-    progress_cb:   Optional[ProgressCallback] = None,
-    verify:        bool = False,
+    parser, chapter, series_dir, quality=85,
+    json_progress=False, progress_cb=None, verify=False,
 ) -> Path:
     ch_dir = series_dir / f"{int(chapter.number):03d}"
     ch_dir.mkdir(parents=True, exist_ok=True)
 
     with open(ch_dir / "metadata.json", "w") as f:
-        json.dump(
-            {"number": chapter.number, "title": chapter.title,
-             "url": chapter.url, "date": chapter.date},
-            f, indent=2,
-        )
+        json.dump({"number": chapter.number, "title": chapter.title,
+                   "url": chapter.url, "date": chapter.date}, f, indent=2)
 
-    # Fetch image list (costs one token-bucket token via the parser's _get)
     image_urls = parser.get_chapter_images(chapter.url)
     headers    = parser.get_image_headers()
     total      = len(image_urls)
 
-    # ── Resume: skip if sentinel exists and all images are present ────
     if _chapter_is_complete(ch_dir, total):
         if json_progress:
             _emit({"status": "skipped", "chapter": chapter.number,
@@ -383,21 +360,18 @@ def download_chapter(
                 chapter.number, chapter.title, total, total, status="skipped"))
         return ch_dir
 
-    # ── Partial resume: find only missing / bad images ────────────────
     missing = _missing_images(ch_dir, image_urls, chapter, verify)
 
     if json_progress:
         _emit({"status": "chapter_start", "chapter": chapter.number,
-               "chapter_id": chapter.number,
-               "title": chapter.title, "total_pages": total,
-               "to_download": len(missing)})
+               "chapter_id": chapter.number, "title": chapter.title,
+               "total_pages": total, "to_download": len(missing)})
     if progress_cb:
-        already_done = total - len(missing)
-        progress_cb(ChapterProgress(chapter.number, chapter.title, already_done, total))
+        progress_cb(ChapterProgress(
+            chapter.number, chapter.title, total - len(missing), total))
 
     if not missing:
-        # All images present — just write sentinel and finish
-        _finalize_chapter(ch_dir, image_urls, chapter, verify)
+        _finalize_chapter(ch_dir, total, verify)
         if json_progress:
             _emit({"status": "chapter_done", "chapter": chapter.number,
                    "chapter_id": chapter.number,
@@ -407,29 +381,28 @@ def download_chapter(
                 chapter.number, chapter.title, total, total, status="done"))
         return ch_dir
 
-    completed    = total - len(missing)
-    done_lock    = threading.Lock()
+    completed = total - len(missing)
+    done_lock = threading.Lock()
     hashes: Dict[str, str] = _load_manifest(ch_dir).get("hashes", {}) if verify else {}
-    _rate_lim_until = [0.0]
+    _rl_until = [0.0]
 
-    def _on_rate_limited(wait_secs: int):
-        _rate_lim_until[0] = time.time() + wait_secs
+    def _on_rate_limited(wait_secs):
+        _rl_until[0] = time.time() + wait_secs
         if progress_cb:
-            progress_cb(ChapterProgress(
-                chapter.number, chapter.title, completed, total,
-                status=f"rate_limited:{wait_secs}",
-            ))
+            progress_cb(ChapterProgress(chapter.number, chapter.title,
+                                        completed, total,
+                                        status=f"rate_limited:{wait_secs}"))
         if json_progress:
             _emit({"status": "rate_limited", "chapter": chapter.number,
                    "chapter_id": chapter.number, "wait_seconds": wait_secs})
 
     def _dl_one(args):
         nonlocal completed
-        idx, url, dest, expected_hash = args
-        fname = dest.name
-        ok = _download_image(url, dest, headers, quality, _on_rate_limited, expected_hash)
+        _, url, dest, expected_hash = args
+        ok = _download_image(url, dest, headers, quality,
+                             _on_rate_limited, expected_hash)
         if ok and verify:
-            hashes[fname] = _sha256_file(dest)
+            hashes[dest.name] = _sha256_file(dest)
         with done_lock:
             completed += 1
             done = completed
@@ -438,16 +411,15 @@ def download_chapter(
                    "chapter_id": chapter.number,
                    "page": done, "total_pages": total,
                    "percent": round(done / total * 100)})
-        if progress_cb and _rate_lim_until[0] < time.time():
+        if progress_cb and _rl_until[0] < time.time():
             progress_cb(ChapterProgress(chapter.number, chapter.title, done, total))
 
     concurrency = config.get("image_concurrency", 4)
     with ThreadPoolExecutor(max_workers=concurrency) as pool:
-        futures = [pool.submit(_dl_one, args) for args in missing]
-        for fut in as_completed(futures):
+        for fut in as_completed([pool.submit(_dl_one, a) for a in missing]):
             fut.result()
 
-    _finalize_chapter(ch_dir, image_urls, chapter, verify, hashes)
+    _finalize_chapter(ch_dir, total, verify, hashes)
 
     if json_progress:
         _emit({"status": "chapter_done", "chapter": chapter.number,
@@ -456,25 +428,22 @@ def download_chapter(
     if progress_cb:
         progress_cb(ChapterProgress(
             chapter.number, chapter.title, total, total, status="done"))
-
     return ch_dir
 
 
-def _finalize_chapter(ch_dir, image_urls, chapter, verify, hashes=None):
-    """Write sentinel and optionally update manifest."""
-    total = len(image_urls)
+def _finalize_chapter(ch_dir, total, verify, hashes=None):
     (ch_dir / _SENTINEL).write_text(
         json.dumps({"pages": total, "timestamp": time.time()}))
-    if verify and hashes is not None:
+    if verify and hashes:
         _save_manifest(ch_dir, hashes, total)
 
 
 # ─────────────────────────────────────────────────────────────────────
-#  Series download
+#  Series download  —  pipelined: fetch + download run concurrently
 # ─────────────────────────────────────────────────────────────────────
 
 def download_series(
-    parser:            SiteParser,
+    parser,
     url:               str,
     chapter_range:     Optional[tuple]     = None,
     specific_chapters: Optional[List[int]] = None,
@@ -484,18 +453,19 @@ def download_series(
     """
     Download a full series or filtered subset.
 
-    Chapters are downloaded **concurrently** (max_concurrent_chapters workers).
-    Images within each chapter use their own image thread pool.
-    A global token-bucket rate limiter keeps total request rate sane.
-    A file-based lock prevents two processes from hitting the same series.
+    The chapter-list fetcher runs on a background thread and pushes
+    ChapterInfo objects into a queue as each page arrives.  The download
+    thread pool reads from that queue and starts work immediately.
+    Chapter 1 begins downloading as soon as the first list page is done —
+    no waiting for the entire chapter list to finish.
+
+    The chapter list is fetched exactly ONCE, even when called from the CLI.
     """
     _reset_bucket()
 
     if json_progress:
         _emit({"status": "fetching_info", "url": url})
 
-    # ── Metadata cache ────────────────────────────────────────────────
-    # Try to re-use cached series info rather than fetching from network.
     series_info = _try_load_cached_series_info(url)
     if series_info is None:
         series_info = parser.get_series_info(url)
@@ -510,10 +480,8 @@ def download_series(
 
     lock = SeriesLock(safe_title)
     if not lock.acquire():
-        msg = (
-            f"Series '{series_info.title}' is already being downloaded "
-            f"by another stripdl process.  Lock: {lock._path}"
-        )
+        msg = (f"Series '{series_info.title}' is already being downloaded "
+               f"by another stripdl process.  Lock: {lock._path}")
         if json_progress:
             _emit({"status": "error", "message": msg})
         else:
@@ -531,28 +499,17 @@ def download_series(
         lock.release()
 
 
-# ── Metadata cache helpers ─────────────────────────────────────────────
+# ── Metadata cache ─────────────────────────────────────────────────────────────
 
 def _try_load_cached_series_info(url: str) -> Optional[SeriesInfo]:
-    """
-    Return cached SeriesInfo if a local metadata.json exists and is fresh.
-    Returns None if cache is missing, stale, or disabled.
-    """
     ttl_days = config.get("cache_ttl_days", 7)
     if ttl_days <= 0:
         return None
-
-    # Derive safe_title by extracting from URL (best-effort)
-    # We need the download_dir to find the metadata file, but we don't know
-    # the title yet.  Strategy: scan download_dir for metadata.json files
-    # whose "url" field matches.
     root = config.download_dir
     if not root.exists():
         return None
-
     ttl_secs = ttl_days * 86400
     now = time.time()
-
     for series_dir in root.iterdir():
         if not series_dir.is_dir():
             continue
@@ -563,12 +520,10 @@ def _try_load_cached_series_info(url: str) -> Optional[SeriesInfo]:
             meta = json.loads(meta_path.read_text())
         except Exception:
             continue
-        # Match on URL
-        if meta.get("url", "") != url and not url.startswith(meta.get("url", "!!!")):
+        if meta.get("url", "") != url:
             continue
-        last_fetched = meta.get("last_fetched", 0)
-        if now - last_fetched > ttl_secs:
-            return None   # stale
+        if now - meta.get("last_fetched", 0) > ttl_secs:
+            return None
         from strip.parsers.base import SeriesInfo as SI
         return SI(
             title=meta.get("title", ""),
@@ -582,109 +537,138 @@ def _try_load_cached_series_info(url: str) -> Optional[SeriesInfo]:
     return None
 
 
-def _do_download(
-    parser, url, series_info, series_dir,
-    chapter_range, specific_chapters,
-    json_progress, progress_cb,
-):
+# ── Pipeline implementation ────────────────────────────────────────────────────
+
+def _passes_filter(ch, chapter_range, specific_chapters) -> bool:
+    if specific_chapters:
+        return int(ch.number) in specific_chapters
+    if chapter_range:
+        s, e = chapter_range
+        return s <= ch.number <= e
+    return True
+
+
+def _do_download(parser, url, series_info, series_dir,
+                 chapter_range, specific_chapters, json_progress, progress_cb):
     verify = config.get("verify_integrity", False)
 
-    # Write / refresh series metadata (including last_fetched timestamp)
-    meta_out = {
-        "title":        series_info.title,
-        "author":       series_info.author,
-        "description":  series_info.description,
-        "cover_url":    series_info.cover_url,
-        "url":          series_info.url,
-        "genre":        series_info.genre,
-        "status":       series_info.status,
-        "last_fetched": time.time(),
-    }
+    # Write / refresh series metadata
     with open(series_dir / "metadata.json", "w") as f:
-        json.dump(meta_out, f, indent=2, ensure_ascii=False)
+        json.dump({
+            "title": series_info.title, "author": series_info.author,
+            "description": series_info.description, "cover_url": series_info.cover_url,
+            "url": series_info.url, "genre": series_info.genre,
+            "status": series_info.status, "last_fetched": time.time(),
+        }, f, indent=2, ensure_ascii=False)
 
     _download_cover(series_info.cover_url, series_dir, parser.get_image_headers())
 
     if json_progress:
         _emit({"status": "fetching_chapters"})
 
-    all_chapters = parser.get_chapter_list(url)
+    # ── Background fetcher → queue → download pool ────────────────────────────
+    #
+    # The fetcher thread calls iter_chapter_list() (which yields one page at a
+    # time) and puts each ChapterInfo onto ch_queue.  The main thread reads from
+    # ch_queue and submits download tasks immediately.  Downloads start as soon
+    # as the first page of chapter metadata arrives — no waiting for the full
+    # list to finish.
 
-    if json_progress:
-        _emit({"status": "chapter_list", "total": len(all_chapters)})
+    ch_queue    = queue.Queue(maxsize=500)
+    fetch_error = [None]
+    total_found = [0]
 
-    # Filter
-    if specific_chapters:
-        chapters = [c for c in all_chapters if int(c.number) in specific_chapters]
-    elif chapter_range:
-        start, end = chapter_range
-        chapters = [c for c in all_chapters if start <= c.number <= end]
-    else:
-        chapters = all_chapters
+    def _fetcher():
+        try:
+            # Use iter_chapter_list if the parser supports it (WebtoonsParser does);
+            # fall back to get_chapter_list wrapped as a generator for others.
+            if hasattr(parser, "iter_chapter_list"):
+                source = parser.iter_chapter_list(url)
+            else:
+                source = iter(parser.get_chapter_list(url))
 
-    if not chapters:
-        if json_progress:
-            _emit({"status": "error", "message": "No chapters matched the filter."})
-        return series_dir
-
-    # Emit skipped chapters immediately; build to_download list
-    to_download: List[ChapterInfo] = []
-    for chapter in chapters:
-        ch_dir   = series_dir / f"{int(chapter.number):03d}"
-        sentinel = ch_dir / _SENTINEL
-        if sentinel.exists() and not config.get("overwrite", False):
-            existing = len(list(ch_dir.glob("*.jpg")))
-            if json_progress:
-                _emit({"status": "skipped", "chapter": chapter.number,
-                       "chapter_id": chapter.number, "reason": "already_downloaded"})
-            if progress_cb:
-                progress_cb(ChapterProgress(
-                    chapter.number, chapter.title,
-                    existing, existing, status="skipped"))
-            continue
-        to_download.append(chapter)
-
-    if json_progress:
-        _emit({"status": "downloading",
-               "chapters_to_download": len(to_download),
-               "chapters_skipped": len(chapters) - len(to_download)})
-
-    if not to_download:
-        if json_progress:
-            _emit({"status": "done", "series": series_info.title,
-                   "directory": str(series_dir)})
-        return series_dir
-
-    max_ch = max(1, config.get("max_concurrent_chapters", 3))
-
-    with ThreadPoolExecutor(max_workers=max_ch) as pool:
-        future_to_ch = {
-            pool.submit(
-                download_chapter,
-                parser=parser,
-                chapter=chapter,
-                series_dir=series_dir,
-                quality=config.get("image_quality", 85),
-                json_progress=json_progress,
-                progress_cb=progress_cb,
-                verify=verify,
-            ): chapter
-            for chapter in to_download
-        }
-
-        for fut in as_completed(future_to_ch):
-            chapter = future_to_ch[fut]
-            try:
-                fut.result()
-            except Exception as e:
+            for ch in source:
+                total_found[0] += 1
                 if json_progress:
-                    _emit({"status": "error", "chapter": chapter.number,
-                           "chapter_id": chapter.number, "message": str(e)})
+                    _emit({"status": "chapter_found", "chapter": ch.number,
+                           "title": ch.title, "count": total_found[0]})
                 if progress_cb:
                     progress_cb(ChapterProgress(
-                        chapter.number, chapter.title, 0, 0, status="error"))
+                        ch.number, ch.title, total_found[0], 0,
+                        status="chapter_found"))
+                ch_queue.put(ch)
+        except Exception as exc:
+            fetch_error[0] = exc
+        finally:
+            ch_queue.put(None)   # sentinel — always sent
+
+    threading.Thread(target=_fetcher, daemon=True, name="chapter-fetcher").start()
+
+    max_ch = max(1, config.get("max_concurrent_chapters", 3))
+    submitted: Dict = {}
+
+    with ThreadPoolExecutor(max_workers=max_ch) as pool:
+        while True:
+            try:
+                ch = ch_queue.get(timeout=120)
+            except queue.Empty:
+                fetch_error[0] = fetch_error[0] or TimeoutError(
+                    "Chapter list fetch stalled for 120 s with no new chapters.")
+                break
+
+            if ch is None:
+                break  # fetcher finished
+
+            if not _passes_filter(ch, chapter_range, specific_chapters):
+                continue
+
+            ch_dir   = series_dir / f"{int(ch.number):03d}"
+            sentinel = ch_dir / _SENTINEL
+            if sentinel.exists() and not config.get("overwrite", False):
+                existing = len(list(ch_dir.glob("*.jpg")))
+                if json_progress:
+                    _emit({"status": "skipped", "chapter": ch.number,
+                           "chapter_id": ch.number, "reason": "already_downloaded"})
+                if progress_cb:
+                    progress_cb(ChapterProgress(
+                        ch.number, ch.title, existing, existing, status="skipped"))
+                continue
+
+            fut = pool.submit(
+                download_chapter,
+                parser=parser, chapter=ch, series_dir=series_dir,
+                quality=config.get("image_quality", 85),
+                json_progress=json_progress, progress_cb=progress_cb,
+                verify=verify,
+            )
+            submitted[fut] = ch
+
+        # Fetcher is done; wait for all remaining downloads
+        for fut in as_completed(submitted):
+            ch = submitted[fut]
+            try:
+                fut.result()
+            except Exception as exc:
+                if json_progress:
+                    _emit({"status": "error", "chapter": ch.number,
+                           "chapter_id": ch.number, "message": str(exc)})
+                if progress_cb:
+                    progress_cb(ChapterProgress(
+                        ch.number, ch.title, 0, 0, status="error"))
+
+    # Notify that chapter-list discovery is complete
+    if progress_cb:
+        progress_cb(ChapterProgress(
+            0, "", total_found[0], total_found[0], status="fetch_done"))
+
+    if fetch_error[0]:
+        if json_progress:
+            _emit({"status": "error",
+                   "message": f"Chapter list error: {fetch_error[0]}"})
+        # Don't abort — partial download is still saved
 
     if json_progress:
+        _emit({"status": "chapter_list", "total": total_found[0]})
         _emit({"status": "done", "series": series_info.title,
                "directory": str(series_dir)})
 
