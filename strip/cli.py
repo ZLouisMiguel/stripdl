@@ -255,6 +255,7 @@ def download(
 
     chapter_tasks: dict[float, TaskID] = {}
     overall_task:  list[Optional[TaskID]] = [None]
+    ch_task:       list[Optional[TaskID]] = [None]   # fetch-progress row
     cb_lock  = threading.Lock()
     watchdog = _ProgressWatchdog(progress, stall_secs=20.0)
 
@@ -264,6 +265,32 @@ def download(
             ch    = cp.chapter_number
             label = f"Ch {int(ch):>4}  {cp.chapter_title[:36]}"
 
+            # ── New pipeline events ──────────────────────────────────
+            if cp.status == "chapter_found":
+                # A new chapter was discovered; expand the overall bar total by 1.
+                if overall_task[0] is not None:
+                    t = progress.tasks[overall_task[0]]
+                    progress.update(overall_task[0], total=max(1, (t.total or 0) + 1))
+                else:
+                    # Overall bar doesn't exist yet — create it now on first chapter
+                    tid = progress.add_task("[bold white]Overall",
+                        total=1, completed=0, status="")
+                    overall_task[0] = tid
+                # Also update the fetch-progress row
+                if ch_task[0] is not None:
+                    progress.update(ch_task[0],
+                        description=f"Fetching chapters…  ({cp.pages_done} found)")
+                return
+
+            if cp.status == "fetch_done":
+                # Chapter list is fully discovered — mark fetch row complete.
+                if ch_task[0] is not None:
+                    progress.update(ch_task[0],
+                        description=f"Chapter list  [dim]({cp.pages_done} total)[/dim]",
+                        total=1, completed=1, status="")
+                return
+            # ────────────────────────────────────────────────────────
+
             if cp.status == "skipped":
                 if ch not in chapter_tasks:
                     tid = progress.add_task(label,
@@ -271,6 +298,11 @@ def download(
                         completed=cp.pages_total,
                         status="[dim]skipped[/dim]")
                     chapter_tasks[ch] = tid
+                # Skipped chapters don't count as "downloaded" — remove from overall
+                if overall_task[0] is not None:
+                    t = progress.tasks[overall_task[0]]
+                    new_total = max(1, (t.total or 1) - 1)
+                    progress.update(overall_task[0], total=new_total)
                 return
 
             if cp.status.startswith("rate_limited:"):
@@ -306,7 +338,7 @@ def download(
     with progress:
         watchdog.start()
 
-        # Phase 1: series info
+        # Phase 1: series info  (single lightweight request)
         si_task = progress.add_task("Connecting…", total=None, completed=0, status="")
         si_result, si_error, si_done = _run_in_thread(lambda: parser.get_series_info(url))
         _wait_animated(si_done, progress, si_task, "Fetching series info…")
@@ -320,41 +352,22 @@ def download(
             description=f"[bold]{series_info.title}[/bold] by {series_info.author}",
             total=1, completed=1, status="")
 
-        # Phase 2: chapter list
-        ch_task = progress.add_task(
-            "Fetching chapters…  (connecting)", total=None, completed=0, status="")
-        try:
-            all_chapters = _fetch_chapters_live(parser, url, progress, ch_task)
-        except Exception as exc:
-            console.print(f"\n[red]Failed to fetch chapter list:[/red] {exc}")
-            watchdog.stop(); sys.exit(1)
-
-        progress.update(ch_task,
-            description=f"Chapter list  [dim]({len(all_chapters)} total)[/dim]",
-            total=1, completed=1, status="")
-
-        # Filter
-        if specific_chapters:
-            to_dl = [c for c in all_chapters if int(c.number) in specific_chapters]
-        elif chapter_range:
-            s, e = chapter_range
-            to_dl = [c for c in all_chapters if s <= c.number <= e]
-        else:
-            to_dl = all_chapters
-
         max_ch = config.get("max_concurrent_chapters", 3)
         console.print(
             f"\n  [cyan]◈[/cyan] [bold]{series_info.title}[/bold]  "
             f"[dim]{series_info.author}[/dim]\n"
-            f"  [dim]{len(all_chapters)} chapters found · {len(to_dl)} queued · "
-            f"{max_ch} concurrent · saving to {config.download_dir}[/dim]\n"
+            f"  [dim]fetching chapters & downloading  ·  {max_ch} concurrent  ·  "
+            f"saving to {config.download_dir}[/dim]\n"
         )
 
-        overall_tid = progress.add_task("[bold white]Overall",
-            total=max(len(to_dl), 1), completed=0, status="")
-        overall_task[0] = overall_tid
+        # Phase 2 + 3: fetch chapter list and download are now pipelined inside
+        # download_series() — it starts downloading the first chapters while later
+        # pages of the chapter list are still being fetched in the background.
+        # The on_progress callback handles chapter_found / fetch_done events to
+        # keep the progress display live.
+        ch_task[0] = progress.add_task(
+            "Fetching chapters…  (connecting)", total=None, completed=0, status="")
 
-        # Phase 3: download
         try:
             series_dir = download_series(
                 parser=parser, url=url,
