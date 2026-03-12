@@ -211,20 +211,42 @@ class WebtoonsParser(SiteParser):
 
     def iter_chapter_list(self, url: str) -> Iterator[ChapterInfo]:
         """
-        Yield ChapterInfo objects as each page arrives, without waiting for
-        the full list to complete.  The downloader calls this so it can start
-        downloading chapter 1 while pages 2, 3, 4 … are still being fetched.
-
+        Yield ChapterInfo objects as each page arrives.
         Pages are fetched in parallel batches of _CONCURRENT_PAGES.
-        Results are yielded in page order (newest chapters first on Webtoons).
+        Yields in site order (newest chapters first on Webtoons).
+
+        Termination is done via deduplication, NOT just len(items) < 10.
+        Webtoons returns the last real page for any out-of-range page number
+        instead of returning empty results, so the len<10 check alone causes
+        an infinite loop for series whose last page has exactly 10 chapters.
+        We track seen episode numbers and stop as soon as a page returns only
+        episodes we have already yielded.
         """
-        # Page 1 serial — needed to check whether the series has more pages
+        seen: set = set()
+
+        def _yield_new(items: List[ChapterInfo]):
+            """Yield unseen items; return True if any were new."""
+            any_new = False
+            for ch in items:
+                if ch.number not in seen:
+                    seen.add(ch.number)
+                    yield ch
+                    any_new = True
+            return any_new  # NOTE: generators can't return values; handled below
+
+        # Page 1 serial — establishes whether the series has multiple pages
         p1 = self._fetch_chapter_page(url, 1)
-        yield from p1
+        new_on_p1 = []
+        for ch in p1:
+            if ch.number not in seen:
+                seen.add(ch.number)
+                new_on_p1.append(ch)
+        yield from new_on_p1
+
         if len(p1) < 10:
             return  # single-page series
 
-        # Remaining pages — parallel batches, yielded in ascending page order
+        # Remaining pages — parallel batches, yielded in page order
         next_page = 2
         with ThreadPoolExecutor(max_workers=_CONCURRENT_PAGES) as pool:
             while True:
@@ -244,8 +266,13 @@ class WebtoonsParser(SiteParser):
                 done = False
                 for p in sorted(results):
                     items = results[p]
-                    yield from items
-                    if len(items) < 10:
+                    new_items = [ch for ch in items if ch.number not in seen]
+                    for ch in new_items:
+                        seen.add(ch.number)
+                    yield from new_items
+                    # Stop if this page had no new episodes (Webtoons echo) OR
+                    # had fewer than 10 items (genuine last page)
+                    if not new_items or len(items) < 10:
                         done = True
                         break
                 if done:
