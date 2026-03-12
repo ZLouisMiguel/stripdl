@@ -587,8 +587,14 @@ def _do_download(parser, url, series_info, series_dir,
             else:
                 source = iter(parser.get_chapter_list(url))
 
+            # Collect the full chapter list first so we can sort before downloading.
+            # Webtoons returns newest-first; we must sort ascending so chapter 1
+            # downloads before chapter 210.  We still emit chapter_found events
+            # as each chapter arrives so the progress bar stays live during fetch.
+            all_chapters = []
             for ch in source:
                 total_found[0] += 1
+                all_chapters.append(ch)
                 if json_progress:
                     _emit({"status": "chapter_found", "chapter": ch.number,
                            "title": ch.title, "count": total_found[0]})
@@ -596,7 +602,12 @@ def _do_download(parser, url, series_info, series_dir,
                     progress_cb(ChapterProgress(
                         ch.number, ch.title, total_found[0], 0,
                         status="chapter_found"))
+
+            # Sort ascending: chapter 1 downloads before chapter 210
+            all_chapters.sort(key=lambda c: c.number)
+            for ch in all_chapters:
                 ch_queue.put(ch)
+
         except Exception as exc:
             fetch_error[0] = exc
         finally:
