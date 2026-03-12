@@ -25,7 +25,7 @@ from strip.library import scan_library
 
 console = Console()
 
-_VERSION = "0.3.0"
+_VERSION = "0.3.1"
 
 
 # ────────────────────────────────────────────────────────────────────
@@ -171,6 +171,8 @@ def _fetch_chapters_live(parser, url: str, progress: Progress,
 @click.argument("url")
 @click.option("--chapters", "-c",
               help="Chapters: range '1-20' or list '1,3,5'.")
+@click.option("--start", "-s", default=None, type=int,
+              help="Start from this chapter number (inclusive). Downloads chapter N through the latest.")
 @click.option("--json-progress", is_flag=True, hidden=True)
 @click.option("--output", "-o", type=click.Path())
 @click.option("--chapter-concurrency", default=None, type=int,
@@ -184,7 +186,7 @@ def _fetch_chapters_live(parser, url: str, progress: Progress,
 @click.option("--verify", is_flag=True, default=False,
               help="Verify image integrity via SHA-256 checksums.")
 def download(
-    url, chapters, json_progress, output,
+    url, chapters, start, json_progress, output,
     chapter_concurrency, image_concurrency, rate_limit,
     no_cache, verify,
 ):
@@ -192,6 +194,7 @@ def download(
 
     Chapters download concurrently (configurable).
     Resumes automatically; completed chapters are skipped.
+    If no filter is given, downloads all chapters from chapter 1.
     """
     if output:                config["download_dir"]          = output
     if chapter_concurrency:   config["max_concurrent_chapters"] = chapter_concurrency
@@ -224,6 +227,9 @@ def download(
                 specific_chapters = [int(x.strip()) for x in chapters.split(",")]
             except ValueError:
                 console.print("[red]Invalid list. Use e.g. 1,2,5[/red]"); sys.exit(1)
+    elif start is not None:
+        # --start N means: download from chapter N through the latest
+        chapter_range = (float(start), float("inf"))
 
     # ── JSON / Electron mode ─────────────────────────────────────────
     if json_progress:
