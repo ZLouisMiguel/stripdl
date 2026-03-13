@@ -28,3 +28,5 @@ strip-data/
 Thumbs.db
 *.log
 .env
+
+**/resources/
