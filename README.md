@@ -10,7 +10,6 @@
 
 </div>
 
----
 
 ## What it is
 
@@ -20,8 +19,6 @@ Strip is two things that work together:
 - **Strip Reader** — an Electron desktop app that reads your local library with a smooth, scrolling reader interface
 
 Downloads are stored in a clean folder structure on your machine. No account, no DRM, no internet connection needed to read.
-
----
 
 ## The app
 
@@ -38,8 +35,6 @@ Strip Reader is a three-panel desktop app built on Electron:
 - *Appearance* — light / dark / system theme
 
 **Download tray** — a persistent bottom drawer that handles downloads without navigating away from what you're reading. Paste a URL, hit start, and a live progress card appears showing per-chapter progress bars with page counts. Multiple jobs queue automatically. The tray stays open across navigation and collapses to a badge when minimised.
-
----
 
 ## Quick start
 
@@ -97,8 +92,6 @@ npm install
 npm start
 ```
 
----
-
 ## How it works
 
 ### Download pipeline
@@ -142,8 +135,6 @@ JSON event stream (subset):
 {"status": "done",          "series": "Tower of God", "directory": "..."}
 ```
 
----
-
 ## Folder structure
 
 ```
@@ -160,8 +151,6 @@ JSON event stream (subset):
     └── 002/
         └── ...
 ```
-
----
 
 ## Download options
 
@@ -182,7 +171,6 @@ stripdl download [OPTIONS] URL
 
 `--chapters` and `--start` are mutually exclusive. Without either, all chapters download from chapter 1.
 
----
 
 ## Configuration
 
@@ -202,8 +190,6 @@ stripdl download [OPTIONS] URL
 | `lazy_loading` | `true` | Lazy-load images in the reader |
 | `preload_next_chapter` | `true` | Pre-fetch next chapter images while reading |
 | `theme` | `"system"` | `"light"` / `"dark"` / `"system"` |
-
----
 
 ## Adding support for new sites
 
@@ -231,8 +217,6 @@ class MySiteParser(SiteParser):
 
 Optionally add `iter_chapter_list(url)` as a generator that yields `ChapterInfo` objects one page at a time. The downloader uses it to pipeline list fetching with downloading. Falls back to `get_chapter_list` if not implemented.
 
----
-
 ## Building a distributable
 
 ```bash
@@ -250,8 +234,6 @@ npm run build:mac    # macOS    (.dmg)
 npm run build:linux  # Linux    (.AppImage)
 ```
 
----
-
 ## Platform notes
 
 | Platform | Note |
@@ -259,7 +241,6 @@ npm run build:linux  # Linux    (.AppImage)
 | Windows | CLI named `stripdl` to avoid conflict with GNU Binutils `strip.exe` |
 | Windows | `file://` image paths use forward slashes (`filePath.replace(/\\/g, "/")`) |
 
----
 
 ## Changelog
 
@@ -294,8 +275,6 @@ npm run build:linux  # Linux    (.AppImage)
 ### v0.1.0
 - Initial release
 
----
-
 ## Contributing
 
 Contributions are welcome — bug fixes, new site parsers, Electron UX improvements, and documentation all count.
@@ -305,8 +284,6 @@ See **[CONTRIBUTING.md](CONTRIBUTING.md)** for:
 - How to write a new site parser
 - Code conventions and commit message format
 - How to submit a pull request
-
----
 
 ## License
 
