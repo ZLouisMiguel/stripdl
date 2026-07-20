@@ -17,11 +17,11 @@ from rich.progress import (
 )
 from rich import box
 
-from strip.config import config
-from strip.parsers import get_parser
-from strip.parsers.base import ChapterInfo
-from strip.downloader import download_series, ChapterProgress
-from strip.library import scan_library
+from core.strip.config import config
+from core.strip.parsers import get_parser
+from core.strip.parsers.base import ChapterInfo
+from core.strip.downloader import download_series, ChapterProgress
+from core.strip.library import scan_library
 
 console = Console()
 
@@ -466,7 +466,7 @@ def config_cmd(set_kv: Optional[str], get_key: Optional[str], reset: bool):
     """View or edit stripdl configuration."""
     if reset:
         import copy
-        from strip.config import _DEFAULTS
+        from core.strip.config import _DEFAULTS
         config._data = copy.deepcopy(_DEFAULTS)
         config.save()
         console.print("[green]Config reset to defaults.[/green]")

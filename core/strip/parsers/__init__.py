@@ -1,7 +1,7 @@
 # strip/parsers/__init__.py
 # Parser registry – automatically maps URL patterns to the correct parser class.
 
-from strip.parsers.webtoons import WebtoonsParser
+from core.strip.parsers.webtoons import WebtoonsParser
 
 PARSERS = [
     WebtoonsParser,

@@ -31,7 +31,7 @@ from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 from bs4 import BeautifulSoup
 
-from strip.parsers.base import SiteParser, SeriesInfo, ChapterInfo
+from core.strip.parsers.base import SiteParser, SeriesInfo, ChapterInfo
 
 _UA = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "

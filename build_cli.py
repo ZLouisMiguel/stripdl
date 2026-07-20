@@ -19,8 +19,8 @@ from pathlib import Path
 ROOT       = Path(__file__).parent
 DIST       = ROOT / "dist"
 BUILD      = ROOT / "build"
-RESOURCES  = ROOT / "electron-app" / "resources" / "strip-cli"
-ENTRY      = ROOT / "strip" / "cli.py"
+RESOURCES  = ROOT / "desktop" / "resources" / "strip-cli"
+ENTRY      = ROOT / "core" / "strip" / "cli.py"
 EXE_NAME   = "stripdl"
 
 

@@ -16,8 +16,8 @@ venv/
 env/
 
 # Electron
-electron-app/node_modules/
-electron-app/dist/
+desktop/node_modules/
+desktop/dist/
 
 # Strip data (downloads)
 strip-data/

@@ -44,8 +44,8 @@ from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 from PIL import Image
 
-from strip.config import config
-from strip.parsers.base import ChapterInfo, SeriesInfo, SiteParser
+from core.strip.config import config
+from core.strip.parsers.base import ChapterInfo, SeriesInfo, SiteParser
 
 
 # ─────────────────────────────────────────────────────────────────────
@@ -524,7 +524,7 @@ def _try_load_cached_series_info(url: str) -> Optional[SeriesInfo]:
             continue
         if now - meta.get("last_fetched", 0) > ttl_secs:
             return None
-        from strip.parsers.base import SeriesInfo as SI
+        from core.strip.parsers.base import SeriesInfo as SI
         return SI(
             title=meta.get("title", ""),
             author=meta.get("author", ""),
