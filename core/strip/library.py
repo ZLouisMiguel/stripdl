@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import List, Optional
 
-from core.strip.config import config
+from strip.config import config
 
 
 @dataclass

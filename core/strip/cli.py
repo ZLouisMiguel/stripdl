@@ -17,11 +17,11 @@ from rich.progress import (
 )
 from rich import box
 
-from core.strip.config import config
-from core.strip.parsers import get_parser
-from core.strip.parsers.base import ChapterInfo
-from core.strip.downloader import download_series, ChapterProgress
-from core.strip.library import scan_library
+from strip.config import config
+from strip.parsers import get_parser
+from strip.parsers.base import ChapterInfo
+from strip.downloader import download_series, ChapterProgress
+from strip.library import scan_library
 
 console = Console()
 

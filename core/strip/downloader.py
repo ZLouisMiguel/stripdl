@@ -44,8 +44,8 @@ from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 from PIL import Image
 
-from core.strip.config import config
-from core.strip.parsers.base import ChapterInfo, SeriesInfo, SiteParser
+from strip.config import config
+from strip.parsers.base import ChapterInfo, SeriesInfo, SiteParser
 
 
 # ─────────────────────────────────────────────────────────────────────
