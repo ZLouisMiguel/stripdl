@@ -571,6 +571,28 @@
       </div>
     </div>
 
+    <!-- ── Confirm Modal (non-blocking DOM overlay for destructive actions) ── -->
+    <div id="confirm-modal" class="modal-overlay" aria-hidden="true">
+      <div
+        class="modal-box"
+        role="alertdialog"
+        aria-modal="true"
+        aria-labelledby="confirm-modal-title"
+        aria-describedby="confirm-modal-message"
+      >
+        <h3 id="confirm-modal-title" class="modal-title">Delete item</h3>
+        <p id="confirm-modal-message" class="modal-message"></p>
+        <div class="modal-actions">
+          <button id="confirm-modal-cancel" class="btn btn-ghost">
+            Cancel
+          </button>
+          <button id="confirm-modal-confirm" class="btn btn-danger">
+            Delete
+          </button>
+        </div>
+      </div>
+    </div>
+
     <script src="js/app.js"></script>
   </body>
 </html>
