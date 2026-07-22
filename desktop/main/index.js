@@ -1,4 +1,4 @@
-// desktop/main/index.js 
+// desktop/main/index.js
 // Main process: windows, IPC, Python CLI subprocess, context menus.
 
 const {
@@ -275,43 +275,27 @@ ipcMain.handle("download:active", () => [...activeDownloads.keys()]);
 //  IPC — File system operations
 // ──────────────────────────────────────────────────────────────────
 
-/** Recursively delete a directory. */
-function rmdir(dirPath) {
-  if (!fs.existsSync(dirPath)) return;
-  fs.rmSync(dirPath, { recursive: true, force: true });
-}
+// v3: Deletion confirmation now happens in-app via a custom DOM modal
+// (see src/js/app.js) instead of a blocking native dialog.showMessageBox
+// call. These handlers assume the renderer has already confirmed the
+// action and perform the erasure fully asynchronously so the main thread
+// is never blocked on disk I/O for large chapter/series directories.
 
 ipcMain.handle("fs:deleteSeries", async (_, seriesDir) => {
-  const result = await dialog.showMessageBox(mainWindow, {
-    type: "warning",
-    buttons: ["Delete", "Cancel"],
-    defaultId: 1,
-    title: "Delete series",
-    message: `Permanently delete this series from disk?\n\n${seriesDir}`,
-  });
-  if (result.response !== 0) return false;
   try {
-    rmdir(seriesDir);
-    return true;
+    await fs.promises.rm(seriesDir, { recursive: true, force: true });
+    return { success: true, directory: seriesDir };
   } catch (e) {
-    return { error: e.message };
+    return { success: false, error: e.message };
   }
 });
 
 ipcMain.handle("fs:deleteChapter", async (_, chapterDir) => {
-  const result = await dialog.showMessageBox(mainWindow, {
-    type: "warning",
-    buttons: ["Delete", "Cancel"],
-    defaultId: 1,
-    title: "Delete chapter",
-    message: `Permanently delete this chapter?\n\n${chapterDir}`,
-  });
-  if (result.response !== 0) return false;
   try {
-    rmdir(chapterDir);
-    return true;
+    await fs.promises.rm(chapterDir, { recursive: true, force: true });
+    return { success: true, directory: chapterDir };
   } catch (e) {
-    return { error: e.message };
+    return { success: false, error: e.message };
   }
 });
 
