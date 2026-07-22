@@ -51,6 +51,65 @@ function showToast(message, type = "info", duration = 3500) {
 }
 
 // ──────────────────────────────────────────────────────────────────
+//  Confirm Modal (custom DOM overlay — replaces blocking native dialogs)
+// ──────────────────────────────────────────────────────────────────
+
+let _confirmModalResolve = null;
+
+function _closeConfirmModal(result) {
+  const overlay = document.getElementById("confirm-modal");
+  if (!overlay) return;
+  overlay.classList.remove("active");
+  overlay.setAttribute("aria-hidden", "true");
+  document.removeEventListener("keydown", _confirmModalKeydown);
+  if (_confirmModalResolve) {
+    _confirmModalResolve(result);
+    _confirmModalResolve = null;
+  }
+}
+
+function _confirmModalKeydown(e) {
+  if (e.key === "Escape") _closeConfirmModal(false);
+  if (e.key === "Enter") _closeConfirmModal(true);
+}
+
+/**
+ * Show the in-app confirm modal and resolve `true`/`false` based on the
+ * user's choice. Fully non-blocking — the renderer (and main process)
+ * stay responsive while the modal is open.
+ */
+function confirmModal(title, message, confirmLabel = "Delete") {
+  const overlay = document.getElementById("confirm-modal");
+  if (!overlay) return Promise.resolve(false);
+
+  overlay.querySelector("#confirm-modal-title").textContent = title;
+  overlay.querySelector("#confirm-modal-message").textContent = message;
+  overlay.querySelector("#confirm-modal-confirm").textContent = confirmLabel;
+
+  return new Promise((resolve) => {
+    _confirmModalResolve = resolve;
+
+    const cancelBtn = overlay.querySelector("#confirm-modal-cancel");
+    const confirmBtn = overlay.querySelector("#confirm-modal-confirm");
+
+    const onCancel = () => _closeConfirmModal(false);
+    const onConfirm = () => _closeConfirmModal(true);
+    const onBackdrop = (e) => {
+      if (e.target === overlay) _closeConfirmModal(false);
+    };
+
+    cancelBtn.addEventListener("click", onCancel, { once: true });
+    confirmBtn.addEventListener("click", onConfirm, { once: true });
+    overlay.addEventListener("click", onBackdrop, { once: true });
+    document.addEventListener("keydown", _confirmModalKeydown);
+
+    overlay.setAttribute("aria-hidden", "false");
+    requestAnimationFrame(() => overlay.classList.add("active"));
+    confirmBtn.focus();
+  });
+}
+
+// ──────────────────────────────────────────────────────────────────
 //  Library cache  (localStorage, 5-min TTL; invalidated on download)
 // ──────────────────────────────────────────────────────────────────
 
@@ -792,15 +851,35 @@ async function buildSeriesCard(series) {
       seriesDir: series.directory,
       seriesTitle: series.title,
     });
-    if (action === "delete") {
-      const result = await window.strip.fs.deleteSeries(series.directory);
-      if (result === true) {
-        _invalidateLibraryCache();
-        await loadLibrary(true);
-        showToast(`"${series.title}" deleted.`, "success");
-      } else if (result?.error) {
-        showToast(`Delete failed: ${result.error}`, "error");
+    if (action !== "delete") return;
+
+    const confirmed = await confirmModal(
+      "Delete series",
+      `Permanently delete "${series.title}" from disk? This cannot be undone.`,
+    );
+    if (!confirmed) return;
+
+    // Non-blocking: fires the async fs.promises.rm call in the main
+    // process and awaits its result without freezing the renderer.
+    const result = await window.strip.fs.deleteSeries(series.directory);
+
+    if (result?.success) {
+      // Splice the deleted series out of in-memory state directly —
+      // no full library re-scan needed for a single deletion.
+      const idx = state.library.findIndex(
+        (s) => s.directory === series.directory,
+      );
+      if (idx !== -1) state.library.splice(idx, 1);
+      _invalidateLibraryCache();
+
+      card.remove();
+      showToast(`"${series.title}" deleted.`, "success");
+
+      if (state.filteredLibrary.length === 0) {
+        await renderLibrary();
       }
+    } else {
+      showToast(`Delete failed: ${result?.error || "Unknown error"}`, "error");
     }
   });
 
@@ -899,13 +978,47 @@ async function openSeries(series) {
         row.classList.add("has-progress");
         showToast(`Ch.${chapter.number} marked as read.`, "success");
       } else if (action === "delete") {
+        const confirmed = await confirmModal(
+          "Delete chapter",
+          `Permanently delete Chapter ${chapter.number}? This cannot be undone.`,
+        );
+        if (!confirmed) return;
+
+        // Non-blocking: awaits fs.promises.rm in the main process without
+        // freezing the renderer thread.
         const result = await window.strip.fs.deleteChapter(chapter.directory);
-        if (result === true) {
+
+        if (result?.success) {
+          // `series.chapters` is the same array reference held by the
+          // matching entry in state.library, so splicing here updates
+          // in-memory state directly — no full library re-scan needed.
+          const chIdx = series.chapters.findIndex(
+            (c) => c.directory === chapter.directory,
+          );
+          if (chIdx !== -1) series.chapters.splice(chIdx, 1);
           _invalidateLibraryCache();
+
           row.remove();
+
+          // Rows after the deleted one now point one index too high —
+          // realign them so click/dblclick handlers still resolve to
+          // the correct chapter without a full list re-render.
+          container.querySelectorAll(".chapter-row").forEach((r) => {
+            const i = parseInt(r.dataset.chapterIndex);
+            if (i > chIdx) r.dataset.chapterIndex = i - 1;
+          });
+
           showToast(`Chapter ${chapter.number} deleted.`, "success");
-        } else if (result?.error) {
-          showToast(`Delete failed: ${result.error}`, "error");
+
+          const header = container.querySelector(
+            ".chapter-list-header h2 .muted",
+          );
+          if (header) header.textContent = series.chapters.length;
+        } else {
+          showToast(
+            `Delete failed: ${result?.error || "Unknown error"}`,
+            "error",
+          );
         }
       }
     });
