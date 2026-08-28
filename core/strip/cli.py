@@ -2,6 +2,9 @@
 # strip/cli.py
 # v2: new CLI options, hierarchical concurrent-chapter progress display.
 # v2.1: fixed `config --reset` import (core.strip.config -> strip.config).
+# v2.2: added --cache-ttl (lets callers set an arbitrary metadata-cache TTL,
+#       not just disable it via --no-cache) and --overwrite (previously only
+#       reachable via `stripdl config --set overwrite=true`).
 
 import json
 import sys
@@ -182,26 +185,36 @@ def _fetch_chapters_live(parser, url: str, progress: Progress,
               help="Concurrent images per chapter (default: from config, 4).")
 @click.option("--rate-limit",          default=None, type=float,
               help="Max requests/sec across all threads (default: from config, 8).")
+@click.option("--cache-ttl", default=None, type=int,
+              help="Days to reuse cached series metadata (default: from config, 7). "
+                   "0 disables caching for this run. Overridden by --no-cache.")
 @click.option("--no-cache", is_flag=True, default=False,
-              help="Ignore cached series metadata; re-fetch from network.")
+              help="Ignore cached series metadata; re-fetch from network. "
+                   "Shorthand for --cache-ttl 0.")
+@click.option("--overwrite", is_flag=True, default=False,
+              help="Re-download chapters even if already marked complete.")
 @click.option("--verify", is_flag=True, default=False,
               help="Verify image integrity via SHA-256 checksums.")
 def download(
     url, chapters, start, json_progress, output,
     chapter_concurrency, image_concurrency, rate_limit,
-    no_cache, verify,
+    cache_ttl, no_cache, overwrite, verify,
 ):
     """Download a webtoon series from URL.
 
     Chapters download concurrently (configurable).
-    Resumes automatically; completed chapters are skipped.
-    If no filter is given, downloads all chapters from chapter 1.
+    Resumes automatically; completed chapters are skipped unless --overwrite
+    is given. If no filter is given, downloads all chapters from chapter 1.
     """
     if output:                config["download_dir"]          = output
     if chapter_concurrency:   config["max_concurrent_chapters"] = chapter_concurrency
     if image_concurrency:     config["image_concurrency"]     = image_concurrency
     if rate_limit is not None: config["rate_limit"]           = rate_limit
-    if no_cache:              config["cache_ttl_days"]         = 0
+    if no_cache:
+        config["cache_ttl_days"] = 0
+    elif cache_ttl is not None:
+        config["cache_ttl_days"] = cache_ttl
+    if overwrite:              config["overwrite"]             = True
     if verify:                config["verify_integrity"]       = True
 
     try:
