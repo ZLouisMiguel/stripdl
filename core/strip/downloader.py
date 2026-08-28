@@ -8,11 +8,28 @@
 #            in _fetch_chapters_live, so every page was fetched twice.
 #
 #   FIX: _do_download() now runs a background "fetcher" thread that calls
-#        parser.iter_chapter_list() and pushes each ChapterInfo into a
-#        queue.Queue as it arrives.  A ThreadPoolExecutor pulls from the
-#        queue and starts download_chapter() immediately — chapter 1 starts
-#        downloading while pages 2, 3, 4 … of the chapter list are still
-#        being fetched.  The chapter list is fetched exactly ONCE.
+#        parser.iter_chapter_list() and streams ChapterInfo objects to the
+#        progress callback (status="chapter_found") as each page of the
+#        chapter list arrives — so the UI shows live discovery progress
+#        instead of a frozen spinner.  The chapter list is still fetched
+#        exactly ONCE (previously the CLI pre-fetched it a second time via
+#        _fetch_chapters_live).
+#
+#   NOTE (previously mis-documented): actual image downloading does NOT
+#        start until discovery finishes.  All discovered chapters are
+#        collected, sorted ascending by chapter number, and only THEN
+#        pushed onto the download queue.  This is deliberate, not an
+#        oversight — Webtoons returns chapters newest-first, and an
+#        earlier version of this code queued chapters in arrival order,
+#        which meant the newest episode downloaded first and broke the
+#        "resume always continues from chapter 1" guarantee (see
+#        CHANGELOG v0.3.0 "Sequential chapter downloads" and v0.3.1
+#        "Downloads were starting from the newest chapter"). Sorting
+#        before enqueueing preserves that guarantee, at the cost of true
+#        discovery/download pipelining: for a very long series, no image
+#        download begins until the entire chapter list has been fetched —
+#        only the chapter_found / fetch_done progress events are live
+#        during that window.
 #
 #   PROBLEM: download_series() was called by the CLI *after* the CLI already
 #            fetched the full list, meaning two full scans per run.
@@ -25,6 +42,38 @@
 #            retry.  One dropped TCP connection = permanent failure.
 #   FIX: A dedicated _img_session with HTTPAdapter(Retry(...)) is used for
 #        all image and cover downloads.
+#
+#   PROBLEM: _try_load_cached_series_info() imported from the wrong package
+#            path (core.strip.parsers.base, which doesn't exist — the
+#            installed package is strip, not core.strip) and raised
+#            ModuleNotFoundError on every cache hit.
+#   FIX: Corrected to `from strip.parsers.base import SeriesInfo as SI`.
+#
+#   PROBLEM: SeriesLock's stale-lock check called os.kill(pid, 0) purely to
+#            test whether a PID was still alive. On POSIX that's a safe
+#            no-op probe, but on Windows os.kill(pid, sig) for any sig other
+#            than the CTRL_*_EVENT constants calls TerminateProcess — so
+#            this could actually kill an unrelated process that happened to
+#            reuse a stale PID.
+#   FIX: Added _pid_is_running(), which uses OpenProcess with a query-only
+#        access right on Windows (never terminates anything) and keeps the
+#        original signal-0 probe on POSIX.
+#
+#   PROBLEM: Chapter numbers are floats specifically to support .5 chapters,
+#            but chapter directories/filenames were built with
+#            f"{int(chapter.number):03d}" — chapter 12 and chapter 12.5
+#            both truncated to folder "012" and silently overwrote each
+#            other's images and metadata.
+#   FIX: Added _chapter_dirname(), which renders whole chapters as before
+#        ("012") and half-chapters distinctly ("012_5"), used everywhere a
+#        chapter number becomes a path component.
+#
+#   PROBLEM: Series-metadata cache lookups compared the cached (canonical)
+#            URL against whatever URL the user typed. A user pasting a
+#            /viewer link instead of the canonical /list link never got a
+#            cache hit, even though the series was already cached.
+#   FIX: download_series() now normalizes the URL via
+#        parser.canonicalize_url() before doing the cache lookup.
 
 import hashlib
 import json
@@ -60,6 +109,32 @@ def _sanitize(name: str) -> str:
 
 def _emit(obj: dict):
     print(json.dumps(obj), flush=True)
+
+
+def _chapter_dirname(number: float) -> str:
+    """
+    Build a stable, sortable directory/file-name fragment for a chapter
+    number.
+
+    Whole numbers render exactly as before, e.g. 12 -> "012". Half-chapters
+    render distinctly, e.g. 12.5 -> "012_5" (a literal "." is avoided since
+    it's a path/extension separator on all three target platforms).
+
+    This matters because ChapterInfo.number is a float specifically to
+    support .5 chapters (see parsers/base.py) — before this fix, chapter 12
+    and chapter 12.5 both truncated to folder "012" via int(number) and
+    silently overwrote each other's images and metadata.
+
+    Only one decimal place is supported (the common .5 case on Webtoons);
+    the fractional part is rounded to the nearest tenth so float noise
+    (e.g. 12.499999999) can't produce a wrong or unstable folder name.
+    """
+    whole = int(number)
+    frac = round(number - whole, 3)
+    if frac == 0:
+        return f"{whole:03d}"
+    tenths = round(frac * 10)
+    return f"{whole:03d}_{tenths}"
 
 
 # ─────────────────────────────────────────────────────────────────────
@@ -168,6 +243,41 @@ ProgressCallback = Callable[[ChapterProgress], None]
 _LOCK_DIR = Path.home() / ".strip" / "locks"
 
 
+def _pid_is_running(pid: int) -> bool:
+    """
+    Return True if *pid* refers to a currently-running process, without
+    ever sending a real signal to it or otherwise touching it.
+
+    On POSIX, os.kill(pid, 0) is a safe no-op existence probe. On Windows,
+    however, os.kill(pid, sig) for any sig other than the CTRL_*_EVENT
+    constants calls TerminateProcess — so os.kill(pid, 0) does NOT just
+    probe there, it can actually kill an unrelated process that happens to
+    have reused a stale PID. We use OpenProcess with a query-only access
+    right instead, which never terminates anything.
+    """
+    if os.name == "nt":
+        import ctypes
+
+        PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+        handle = ctypes.windll.kernel32.OpenProcess(
+            PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
+        if not handle:
+            return False
+        ctypes.windll.kernel32.CloseHandle(handle)
+        return True
+
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        # Process exists but is owned by another user — still running.
+        return True
+    except OSError:
+        return False
+    return True
+
+
 class SeriesLock:
     def __init__(self, safe_title: str):
         _LOCK_DIR.mkdir(parents=True, exist_ok=True)
@@ -184,12 +294,19 @@ class SeriesLock:
         except FileExistsError:
             try:
                 pid = int(self._path.read_text().strip())
-                os.kill(pid, 0)
-                return False
-            except (ProcessLookupError, ValueError, OSError):
+            except (ValueError, OSError):
+                # Lock file is empty/corrupt — treat as stale and take over.
                 self._path.write_text(str(os.getpid()))
                 self._acquired = True
                 return True
+
+            if _pid_is_running(pid):
+                return False
+
+            # Stale lock from a crashed/killed process — take it over.
+            self._path.write_text(str(os.getpid()))
+            self._acquired = True
+            return True
 
     def release(self):
         if self._acquired and self._path.exists():
@@ -301,7 +418,7 @@ def _missing_images(ch_dir, image_urls, chapter, verify):
     manifest = _load_manifest(ch_dir) if verify else {}
     missing = []
     for i, url in enumerate(image_urls, start=1):
-        fname = f"{int(chapter.number):03d}_{i:03d}.jpg"
+        fname = f"{_chapter_dirname(chapter.number)}_{i:03d}.jpg"
         dest  = ch_dir / fname
         expected_hash = manifest.get("hashes", {}).get(fname) if verify else None
         if dest.exists() and dest.stat().st_size > 0:
@@ -340,7 +457,7 @@ def download_chapter(
     parser, chapter, series_dir, quality=85,
     json_progress=False, progress_cb=None, verify=False,
 ) -> Path:
-    ch_dir = series_dir / f"{int(chapter.number):03d}"
+    ch_dir = series_dir / _chapter_dirname(chapter.number)
     ch_dir.mkdir(parents=True, exist_ok=True)
 
     with open(ch_dir / "metadata.json", "w") as f:
@@ -439,7 +556,7 @@ def _finalize_chapter(ch_dir, total, verify, hashes=None):
 
 
 # ─────────────────────────────────────────────────────────────────────
-#  Series download  —  pipelined: fetch + download run concurrently
+#  Series download
 # ─────────────────────────────────────────────────────────────────────
 
 def download_series(
@@ -453,20 +570,29 @@ def download_series(
     """
     Download a full series or filtered subset.
 
-    The chapter-list fetcher runs on a background thread and pushes
-    ChapterInfo objects into a queue as each page arrives.  The download
-    thread pool reads from that queue and starts work immediately.
-    Chapter 1 begins downloading as soon as the first list page is done —
-    no waiting for the entire chapter list to finish.
+    Discovery and downloading are NOT fully pipelined: the chapter-list
+    fetcher runs on a background thread and streams live "chapter_found"
+    progress events as pages arrive, but every discovered chapter is
+    collected, sorted ascending by chapter number, and only then pushed to
+    the download queue. This guarantees chapter 1 always downloads first on
+    resume (Webtoons returns chapters newest-first), at the cost of true
+    pipelining — see the module-level comment at the top of this file for
+    the history of why that trade-off is deliberate.
 
     The chapter list is fetched exactly ONCE, even when called from the CLI.
     """
     _reset_bucket()
 
+    # Cache lookups must compare against the parser's canonical form of the
+    # URL (e.g. Webtoons /viewer -> /list), otherwise a user who pastes a
+    # /viewer link never gets a cache hit even though the series was
+    # already fetched and cached under its canonical URL.
+    canonical_url = parser.canonicalize_url(url)
+
     if json_progress:
         _emit({"status": "fetching_info", "url": url})
 
-    series_info = _try_load_cached_series_info(url)
+    series_info = _try_load_cached_series_info(canonical_url)
     if series_info is None:
         series_info = parser.get_series_info(url)
 
@@ -502,6 +628,10 @@ def download_series(
 # ── Metadata cache ─────────────────────────────────────────────────────────────
 
 def _try_load_cached_series_info(url: str) -> Optional[SeriesInfo]:
+    """
+    *url* must already be canonicalized by the caller (see
+    parser.canonicalize_url()) so it matches what's stored in metadata.json.
+    """
     ttl_days = config.get("cache_ttl_days", 7)
     if ttl_days <= 0:
         return None
@@ -524,7 +654,7 @@ def _try_load_cached_series_info(url: str) -> Optional[SeriesInfo]:
             continue
         if now - meta.get("last_fetched", 0) > ttl_secs:
             return None
-        from core.strip.parsers.base import SeriesInfo as SI
+        from strip.parsers.base import SeriesInfo as SI
         return SI(
             title=meta.get("title", ""),
             author=meta.get("author", ""),
@@ -569,10 +699,11 @@ def _do_download(parser, url, series_info, series_dir,
     # ── Background fetcher → queue → download pool ────────────────────────────
     #
     # The fetcher thread calls iter_chapter_list() (which yields one page at a
-    # time) and puts each ChapterInfo onto ch_queue.  The main thread reads from
-    # ch_queue and submits download tasks immediately.  Downloads start as soon
-    # as the first page of chapter metadata arrives — no waiting for the full
-    # list to finish.
+    # time) and streams chapter_found progress events as each page arrives, so
+    # the progress bar stays live during discovery. It still collects every
+    # chapter and sorts ascending before any of them are pushed to ch_queue —
+    # see the download_series() docstring and the module header comment for
+    # why downloads intentionally wait for discovery to finish.
 
     ch_queue    = queue.Queue(maxsize=500)
     fetch_error = [None]
@@ -633,7 +764,7 @@ def _do_download(parser, url, series_info, series_dir,
             if not _passes_filter(ch, chapter_range, specific_chapters):
                 continue
 
-            ch_dir   = series_dir / f"{int(ch.number):03d}"
+            ch_dir   = series_dir / _chapter_dirname(ch.number)
             sentinel = ch_dir / _SENTINEL
             if sentinel.exists() and not config.get("overwrite", False):
                 existing = len(list(ch_dir.glob("*.jpg")))
