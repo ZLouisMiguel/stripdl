@@ -2,6 +2,7 @@
 # Scans the download directory and returns a structured view of what's locally available.
 
 import json
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import List, Optional
@@ -37,6 +38,31 @@ class LocalSeries:
         return len(self.chapters)
 
 
+# Matches chapter directory names produced by downloader._chapter_dirname():
+#   "012"   -> whole chapter 12
+#   "012_5" -> half chapter 12.5
+_CHAPTER_DIR_RE = re.compile(r"^(\d+)(?:_(\d))?$")
+
+
+def _number_from_dirname(name: str) -> Optional[float]:
+    """
+    Parse a chapter number back out of a directory name produced by
+    downloader._chapter_dirname(), e.g. "012" -> 12.0, "012_5" -> 12.5.
+    Returns None if *name* doesn't match the expected pattern (i.e. it's
+    not a chapter directory at all).
+
+    This replaces a plain `name.isdigit()` check, which stopped matching
+    half-chapter folders once downloader.py started distinguishing "012"
+    from "012_5" instead of silently colliding them.
+    """
+    m = _CHAPTER_DIR_RE.match(name)
+    if not m:
+        return None
+    whole = int(m.group(1))
+    tenths = int(m.group(2)) if m.group(2) else 0
+    return whole + tenths / 10
+
+
 def scan_library(download_dir: Optional[Path] = None) -> List[LocalSeries]:
     """
     Walk *download_dir* and return a list of LocalSeries objects.
@@ -64,12 +90,13 @@ def scan_library(download_dir: Optional[Path] = None) -> List[LocalSeries]:
 
         cover = series_dir / "cover.jpg"
 
-        # Scan chapters (subdirs with 3-digit names)
+        # Scan chapters (subdirs matching the chapter-directory naming scheme)
         chapters: List[LocalChapter] = []
         for ch_dir in sorted(series_dir.iterdir()):
             if not ch_dir.is_dir():
                 continue
-            if not ch_dir.name.isdigit():
+            dirname_number = _number_from_dirname(ch_dir.name)
+            if dirname_number is None:
                 continue
 
             ch_meta_file = ch_dir / "metadata.json"
@@ -84,8 +111,8 @@ def scan_library(download_dir: Optional[Path] = None) -> List[LocalSeries]:
             page_count = len(list(ch_dir.glob("*.jpg")))
             chapters.append(
                 LocalChapter(
-                    number=ch_meta.get("number", float(ch_dir.name)),
-                    title=ch_meta.get("title", f"Chapter {ch_dir.name}"),
+                    number=ch_meta.get("number", dirname_number),
+                    title=ch_meta.get("title", f"Chapter {dirname_number:g}"),
                     directory=ch_dir,
                     page_count=page_count,
                     metadata=ch_meta,
