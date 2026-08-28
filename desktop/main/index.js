@@ -122,6 +122,17 @@ ipcMain.handle("config:set", (_, updates) => {
 //  IPC — Library scanning
 // ──────────────────────────────────────────────────────────────────
 
+// Matches chapter directory names produced by the Python side's
+// downloader._chapter_dirname():
+//   "012"   -> whole chapter 12
+//   "012_5" -> half chapter 12.5
+// Previously this was a plain /^\d+$/ test, which stopped matching
+// half-chapter folders once the Python downloader started rendering them
+// as "012_5" instead of colliding them with "012" — those chapters would
+// silently vanish from the library view even though the fix to disk
+// layout was correct.
+const CHAPTER_DIR_RE = /^(\d+)(?:_(\d))?$/;
+
 ipcMain.handle("library:scan", () => {
   const root = appConfig.downloadDir;
   if (!fs.existsSync(root)) return [];
@@ -142,12 +153,17 @@ ipcMain.handle("library:scan", () => {
     const chapters = [];
 
     for (const ch of fs.readdirSync(seriesDir, { withFileTypes: true })) {
-      if (!ch.isDirectory() || !/^\d+$/.test(ch.name)) continue;
+      if (!ch.isDirectory()) continue;
+      const m = CHAPTER_DIR_RE.exec(ch.name);
+      if (!m) continue;
+
+      const dirNumber =
+        parseInt(m[1], 10) + (m[2] ? parseInt(m[2], 10) / 10 : 0);
       const chDir = path.join(seriesDir, ch.name);
       const chMeta = path.join(chDir, "metadata.json");
       let chData = {
-        number: parseInt(ch.name),
-        title: `Chapter ${parseInt(ch.name)}`,
+        number: dirNumber,
+        title: `Chapter ${dirNumber}`,
       };
       try {
         chData = { ...chData, ...JSON.parse(fs.readFileSync(chMeta, "utf8")) };
