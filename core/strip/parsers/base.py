@@ -86,3 +86,20 @@ class SiteParser(ABC):
         Override if the CDN requires a Referer or custom User-Agent.
         """
         return {}
+
+    def canonicalize_url(self, url: str) -> str:
+        """
+        Return the canonical form of *url* for this site — e.g. collapsing a
+        '/viewer' chapter-reader URL down to its parent '/list' series URL.
+
+        Used so cache lookups and stored metadata agree regardless of which
+        URL variant the user pasted in (previously the downloader compared
+        cached metadata against whatever raw URL was typed, so a /viewer
+        link never matched a /list link for the same series even though
+        both had already been cached).
+
+        Override on parsers where a single series can be reached via more
+        than one URL shape. The default is identity — sites with only one
+        canonical URL form don't need to override this.
+        """
+        return url
