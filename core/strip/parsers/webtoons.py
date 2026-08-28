@@ -19,6 +19,13 @@
 #        objects one page at a time. The downloader uses this so downloads
 #        start on the first batch of chapters while later pages are still
 #        being fetched in the background.
+#
+#   PROBLEM: The downloader's series-info cache compared metadata against
+#            whichever raw URL the user typed (/viewer or /list), so a
+#            /viewer link never matched a cached /list entry.
+#   FIX: Exposed the existing _normalize_url() logic via
+#        SiteParser.canonicalize_url(), so the downloader can normalize
+#        before doing cache lookups.
 
 import re
 import threading
@@ -169,6 +176,9 @@ class WebtoonsParser(SiteParser):
     def name(self) -> str:
         return "Webtoons.com"
 
+    def canonicalize_url(self, url: str) -> str:
+        return _normalize_url(url)
+
     # ── series info ────────────────────────────────────────────────────────────
 
     def get_series_info(self, url: str) -> SeriesInfo:
@@ -223,16 +233,6 @@ class WebtoonsParser(SiteParser):
         episodes we have already yielded.
         """
         seen: set = set()
-
-        def _yield_new(items: List[ChapterInfo]):
-            """Yield unseen items; return True if any were new."""
-            any_new = False
-            for ch in items:
-                if ch.number not in seen:
-                    seen.add(ch.number)
-                    yield ch
-                    any_new = True
-            return any_new  # NOTE: generators can't return values; handled below
 
         # Page 1 serial — establishes whether the series has multiple pages
         p1 = self._fetch_chapter_page(url, 1)
