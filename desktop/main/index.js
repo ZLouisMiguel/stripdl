@@ -37,6 +37,7 @@ function loadConfig() {
     rateLimit: 8,
     cacheTtlDays: 7,
     verifyIntegrity: false,
+    overwrite: false,
     lazyLoading: true,
     preloadNextChapter: true,
   };
@@ -233,11 +234,15 @@ ipcMain.handle("download:start", (event, { url, chapters, downloadDir }) => {
     args.push("--image-concurrency", String(cfg.imageConcurrency));
   if (cfg.rateLimit !== undefined)
     args.push("--rate-limit", String(cfg.rateLimit));
-  if (cfg.cacheTtlDays !== undefined) {
-    // Pass via env var — CLI reads config file; we just trigger a refresh if 0
-    if (cfg.cacheTtlDays === 0) args.push("--no-cache");
-  }
+  // Previously this only ever sent --no-cache when cacheTtlDays === 0 and
+  // silently dropped every other value, so setting "Metadata cache (days)"
+  // to e.g. 3 or 30 in the Settings UI had no effect on the CLI at all.
+  // --cache-ttl now carries the actual configured value through in every
+  // case (0 included, where it behaves the same as before).
+  if (cfg.cacheTtlDays !== undefined)
+    args.push("--cache-ttl", String(cfg.cacheTtlDays));
   if (cfg.verifyIntegrity) args.push("--verify");
+  if (cfg.overwrite) args.push("--overwrite");
 
   const cliPath = getStripCliPath();
   const child = spawn(cliPath, args, { env: { ...process.env } });
