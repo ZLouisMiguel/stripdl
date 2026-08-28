@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 # strip/cli.py
 # v2: new CLI options, hierarchical concurrent-chapter progress display.
+# v2.1: fixed `config --reset` import (core.strip.config -> strip.config).
 
 import json
 import sys
@@ -466,7 +467,7 @@ def config_cmd(set_kv: Optional[str], get_key: Optional[str], reset: bool):
     """View or edit stripdl configuration."""
     if reset:
         import copy
-        from core.strip.config import _DEFAULTS
+        from strip.config import _DEFAULTS
         config._data = copy.deepcopy(_DEFAULTS)
         config.save()
         console.print("[green]Config reset to defaults.[/green]")
