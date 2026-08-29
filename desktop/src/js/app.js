@@ -1332,6 +1332,7 @@ async function loadSettings() {
   set("setting-rate-limit", cfg.rateLimit ?? 8);
   set("setting-cache-ttl", cfg.cacheTtlDays ?? 7);
   set("setting-verify-integrity", cfg.verifyIntegrity ?? false);
+  set("setting-overwrite", cfg.overwrite ?? false);
   set("setting-max-jobs", cfg.maxConcurrentJobs ?? 2);
   set("setting-lazy-loading", cfg.lazyLoading !== false);
   set("setting-preload-next", cfg.preloadNextChapter !== false);
@@ -1498,6 +1499,7 @@ async function init() {
   numSetting("setting-cache-ttl", "cacheTtlDays", (v) => parseInt(v) || 7);
   numSetting("setting-max-jobs", "maxConcurrentJobs", (v) => parseInt(v) || 2);
   boolSetting("setting-verify-integrity", "verifyIntegrity");
+  boolSetting("setting-overwrite", "overwrite");
   boolSetting("setting-lazy-loading", "lazyLoading");
   boolSetting("setting-preload-next", "preloadNextChapter");
 
