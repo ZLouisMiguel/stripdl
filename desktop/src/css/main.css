@@ -1709,3 +1709,46 @@ body {
   justify-content: flex-end;
   gap: 10px;
 }
+
+/* ── Auto-download schedule picker ──────────────────────────── */
+
+.schedule-card {
+  margin-bottom: 24px;
+}
+
+.schedule-days {
+  display: flex;
+  gap: 6px;
+  margin-top: 12px;
+  flex-wrap: wrap;
+}
+
+.day-pill {
+  padding: 6px 12px;
+  border-radius: 100px;
+  border: 1.5px solid var(--border);
+  background: var(--bg);
+  color: var(--text-secondary);
+  font-size: 12.5px;
+  font-weight: 500;
+  transition:
+    background 0.15s,
+    border-color 0.15s,
+    color 0.15s;
+}
+
+.day-pill:hover {
+  border-color: var(--steel);
+  color: var(--text);
+}
+
+.day-pill.active {
+  background: var(--steel);
+  border-color: var(--steel);
+  color: #fff;
+}
+
+.schedule-status {
+  margin-top: 10px;
+  font-size: 12px;
+}
