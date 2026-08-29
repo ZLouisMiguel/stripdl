@@ -1,4 +1,4 @@
-// electron-app/src/js/app.js  — v2
+// electron-app/src/js/app.js  — v3
 // Renderer process: all UI logic.
 // Communicates with main process ONLY via window.strip (preload.js).
 
@@ -887,6 +887,123 @@ async function buildSeriesCard(series) {
 }
 
 // ──────────────────────────────────────────────────────────────────
+//  Auto-download schedule card (series detail page)
+// ──────────────────────────────────────────────────────────────────
+
+// Order matches scheduler.js's DAY_CODES (Date.prototype.getDay() order:
+// Sunday = 0).
+const SCHEDULE_DAYS = [
+  { code: "sun", label: "Sun" },
+  { code: "mon", label: "Mon" },
+  { code: "tue", label: "Tue" },
+  { code: "wed", label: "Wed" },
+  { code: "thu", label: "Thu" },
+  { code: "fri", label: "Fri" },
+  { code: "sat", label: "Sat" },
+];
+
+function _scheduleStatusText(entry) {
+  if (!entry?.lastCheckedAt) return "Not checked yet.";
+  const when = new Date(entry.lastCheckedAt).toLocaleString(undefined, {
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  });
+  if (entry.lastResult === "error") {
+    return `Last check failed (${when}): ${esc(entry.lastError || "unknown error")}`;
+  }
+  if (entry.lastDownloadedCount > 0) {
+    return `Last checked ${when} — ${entry.lastDownloadedCount} new chapter${entry.lastDownloadedCount > 1 ? "s" : ""}.`;
+  }
+  return `Last checked ${when} — no new chapters.`;
+}
+
+function buildScheduleCardHtml(series, entry) {
+  const url = series.url || series.metadata?.url || "";
+  if (!url) {
+    return `
+      <div class="settings-group card schedule-card">
+        <h2 class="settings-group-title">Auto-download</h2>
+        <p class="muted">This series is missing its saved source URL, so it
+        can't be auto-checked. Use "Download more" once to re-save it, then
+        this will become available.</p>
+      </div>
+    `;
+  }
+
+  const enabled = entry?.enabled ?? false;
+  const days = entry?.days ?? [];
+
+  const dayButtons = SCHEDULE_DAYS.map(
+    ({ code, label }) => `
+      <button type="button" class="day-pill ${days.includes(code) ? "active" : ""}" data-day="${code}">${label}</button>
+    `,
+  ).join("");
+
+  return `
+    <div class="settings-group card schedule-card">
+      <h2 class="settings-group-title">Auto-download</h2>
+      <div class="setting-row">
+        <div>
+          <div class="setting-label">Check for new chapters automatically</div>
+          <div class="setting-desc muted">Runs in the background on the days below, only while you're online.</div>
+        </div>
+        <label class="toggle">
+          <input type="checkbox" id="schedule-enabled" ${enabled ? "checked" : ""} />
+          <span class="toggle-slider"></span>
+        </label>
+      </div>
+      <div class="schedule-days" id="schedule-days">${dayButtons}</div>
+      <div class="schedule-status muted" id="schedule-status">${_scheduleStatusText(entry)}</div>
+    </div>
+  `;
+}
+
+function wireScheduleCard(container, series) {
+  const enabledEl = container.querySelector("#schedule-enabled");
+  const daysWrap = container.querySelector("#schedule-days");
+  if (!enabledEl || !daysWrap) return; // missing-URL branch rendered instead
+
+  const days = new Set(
+    daysWrap.querySelectorAll(".day-pill.active").length
+      ? [...daysWrap.querySelectorAll(".day-pill.active")].map(
+          (b) => b.dataset.day,
+        )
+      : [],
+  );
+
+  const persist = async () => {
+    try {
+      await window.strip.schedule.set(series.directory, {
+        url: series.url ?? series.metadata?.url ?? "",
+        title: series.title,
+        enabled: enabledEl.checked,
+        days: [...days],
+      });
+    } catch (e) {
+      showToast(`Failed to save schedule: ${e.message}`, "error");
+    }
+  };
+
+  enabledEl.addEventListener("change", persist);
+
+  daysWrap.querySelectorAll(".day-pill").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const day = btn.dataset.day;
+      if (days.has(day)) {
+        days.delete(day);
+        btn.classList.remove("active");
+      } else {
+        days.add(day);
+        btn.classList.add("active");
+      }
+      persist();
+    });
+  });
+}
+
+// ──────────────────────────────────────────────────────────────────
 //  Series detail
 // ──────────────────────────────────────────────────────────────────
 
@@ -905,6 +1022,13 @@ async function openSeries(series) {
     : null;
 
   const chapterRowsHtml = await buildChapterRows(series, lastRead);
+
+  let scheduleEntry = null;
+  try {
+    const schedules = await window.strip.schedule.get();
+    scheduleEntry = schedules?.[series.directory] ?? null;
+  } catch (_) {}
+  const scheduleCardHtml = buildScheduleCardHtml(series, scheduleEntry);
 
   container.innerHTML = `
     <div class="series-detail-hero">
@@ -936,6 +1060,7 @@ async function openSeries(series) {
         </div>
       </div>
     </div>
+    ${scheduleCardHtml}
     <div class="chapter-list-header">
       <h2>Chapters <span class="muted" style="font-size:14px;font-family:var(--font-body)">${series.chapters?.length ?? 0}</span></h2>
     </div>
@@ -943,6 +1068,8 @@ async function openSeries(series) {
       ${chapterRowsHtml}
     </div>
   `;
+
+  wireScheduleCard(container, series);
 
   // Chapter row click → open reader
   container.querySelectorAll(".chapter-row").forEach((row) => {
@@ -1374,6 +1501,28 @@ async function init() {
   } catch (_) {}
 
   DownloadTray.init();
+
+  // Auto-download schedule notifications — fires whether or not the
+  // download tray is open, since scheduled checks aren't user-initiated.
+  window.strip.schedule.onEvent((data) => {
+    if (data.error) {
+      showToast(
+        `Auto-download check failed for "${data.title}": ${data.error}`,
+        "error",
+      );
+      return;
+    }
+    if (data.downloaded > 0) {
+      showToast(
+        `${data.title}: ${data.downloaded} new chapter${data.downloaded > 1 ? "s" : ""} downloaded.`,
+        "success",
+      );
+      _invalidateLibraryCache();
+      if (state.currentView === "library") loadLibrary(true);
+    }
+    // downloaded === 0 and no error -> nothing new; stay silent in-app too,
+    // matching the native notification behavior in main/index.js.
+  });
 
   // Nav links
   document.querySelectorAll(".nav-link[data-view]").forEach((link) => {
