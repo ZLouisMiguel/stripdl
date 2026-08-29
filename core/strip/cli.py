@@ -5,6 +5,9 @@
 # v2.2: added --cache-ttl (lets callers set an arbitrary metadata-cache TTL,
 #       not just disable it via --no-cache) and --overwrite (previously only
 #       reachable via `stripdl config --set overwrite=true`).
+# v2.3: removed _fetch_chapters_live, a leftover helper from before
+#       download_series() did its own pipelined chapter-list fetch —
+#       nothing called it anymore.
 
 import json
 import sys
@@ -116,55 +119,6 @@ def _wait_animated(done: threading.Event, progress: Progress, task_id: TaskID,
     while not done.wait(timeout=interval):
         progress.update(task_id, description=f"{base_desc} {frames[i % len(frames)]}")
         i += 1
-
-
-# ────────────────────────────────────────────────────────────────────
-#  Paginated chapter-list fetch with live per-page counter
-# ────────────────────────────────────────────────────────────────────
-
-def _fetch_chapters_live(parser, url: str, progress: Progress,
-                         task_id: TaskID) -> List[ChapterInfo]:
-    """
-    Fetch chapter list using parser._fetch_chapter_page if available (for live
-    per-page counter), otherwise fall back to get_chapter_list on a thread.
-    """
-    if not hasattr(parser, "_fetch_chapter_page"):
-        result, error, done = _run_in_thread(lambda: parser.get_chapter_list(url))
-        _wait_animated(done, progress, task_id, "Fetching chapters…")
-        if error[0]: raise error[0]
-        return result[0]
-
-    chapters: List[ChapterInfo] = []
-    page = 1
-    while True:
-        _page_result: list = []
-        _page_error:  list = []
-        _page_done = threading.Event()
-
-        def _fetch_page(p=page):
-            try:    _page_result.extend(parser._fetch_chapter_page(url, p))
-            except Exception as exc: _page_error.append(exc)
-            finally: _page_done.set()
-
-        threading.Thread(target=_fetch_page, daemon=True).start()
-
-        base = f"Fetching chapters…  page {page}  ({len(chapters)} found)"
-        _wait_animated(_page_done, progress, task_id, base)
-
-        if _page_error: raise _page_error[0]
-
-        page_items = _page_result
-        if not page_items: break
-
-        chapters.extend(page_items)
-        progress.update(task_id,
-            description=f"Fetching chapters…  page {page}  ({len(chapters)} found)")
-
-        if len(page_items) < 10: break
-        page += 1
-
-    chapters.sort(key=lambda c: c.number)
-    return chapters
 
 
 # ────────────────────────────────────────────────────────────────────
