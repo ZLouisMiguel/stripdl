@@ -18,7 +18,13 @@ const { spawn } = require("child_process");
 const { buildDownloadConfigArgs } = require("./configKeys");
 const { startScheduler } = require("./scheduler");
 
-const isDev = process.argv.includes("--dev");
+// True in `electron-vite dev` (HMR dev server) or when launched with
+// --dev directly. ELECTRON_RENDERER_URL is set by electron-vite's dev
+// command; its presence is the more reliable signal since it's what
+// actually determines whether we loadURL() a dev server or loadFile() the
+// built renderer below.
+const isDev =
+  process.argv.includes("--dev") || !!process.env.ELECTRON_RENDERER_URL;
 
 // ──────────────────────────────────────────────────────────────────
 //  Config persistence
@@ -73,15 +79,28 @@ function createMainWindow() {
     titleBarStyle: process.platform === "darwin" ? "hiddenInset" : "default",
     backgroundColor: "#f5f1e6",
     webPreferences: {
-      preload: path.join(__dirname, "preload.js"),
+      // electron-vite builds the preload bundle to out/preload/index.js,
+      // a sibling of out/main/index.js (where this file itself ends up
+      // after being built) — hence "../preload/index.js" rather than the
+      // old same-directory "preload.js".
+      preload: path.join(__dirname, "../preload/index.js"),
       contextIsolation: true,
       nodeIntegration: false,
-      // v2: webSecurity enabled; CSP in index.html allows file: images
+      // v2: webSecurity enabled; CSP in renderer/index.html allows file: images
       webSecurity: true,
     },
   });
 
-  mainWindow.loadFile(path.join(__dirname, "../src/index.html"));
+  // In dev, electron-vite runs a Vite dev server for the renderer (HMR)
+  // and sets ELECTRON_RENDERER_URL to its address. In a built/packaged
+  // app, that env var is absent and we load the static built HTML instead
+  // — a sibling of out/main/index.js, same layout as the preload path above.
+  if (process.env.ELECTRON_RENDERER_URL) {
+    mainWindow.loadURL(process.env.ELECTRON_RENDERER_URL);
+  } else {
+    mainWindow.loadFile(path.join(__dirname, "../renderer/index.html"));
+  }
+
   if (isDev) mainWindow.webContents.openDevTools();
   mainWindow.on("closed", () => {
     mainWindow = null;
@@ -350,16 +369,6 @@ ipcMain.handle("download:active", () => [...activeDownloads.keys()]);
 // ──────────────────────────────────────────────────────────────────
 //  Scheduler — per-series "auto-download on release day"
 // ──────────────────────────────────────────────────────────────────
-//
-// Each series can be subscribed to specific local weekdays (e.g. "every
-// Thursday"). A background tick (desktop/main/scheduler.js) checks, at
-// most every 15 minutes, whether today is a scheduled day for a series
-// that hasn't already been checked today — and if the machine is online,
-// runs a normal `stripdl download` for it, which naturally only pulls
-// chapters that aren't already on disk via the existing resume logic.
-//
-// Schedules are keyed by series directory (stable across renames of the
-// download root) and persisted in appConfig.schedules.
 
 let scheduler = null;
 
@@ -375,9 +384,6 @@ function notifySchedule(entry, result) {
   }
 
   if (!Notification.isSupported()) return;
-  // Only surface a native notification when there's something worth
-  // interrupting the user for — new chapters, or a failure they'd want to
-  // know about. A "checked, nothing new" result stays silent.
   if (result.hadError) {
     new Notification({
       title: `Strip — couldn't check ${title}`,
@@ -416,10 +422,6 @@ function initScheduler() {
     },
   });
 
-  // Catch up promptly after the machine wakes from sleep, rather than
-  // waiting for the next 15-minute tick — this is the main real-world case
-  // where "today's schedule" and "actually online" become true at the same
-  // moment (laptop closed overnight, opened Thursday morning).
   powerMonitor.on("resume", () => scheduler.runNow());
 }
 
@@ -440,12 +442,6 @@ ipcMain.handle("schedule:runNow", async () => {
 // ──────────────────────────────────────────────────────────────────
 //  IPC — File system operations
 // ──────────────────────────────────────────────────────────────────
-
-// v3: Deletion confirmation now happens in-app via a custom DOM modal
-// (see src/js/app.js) instead of a blocking native dialog.showMessageBox
-// call. These handlers assume the renderer has already confirmed the
-// action and perform the erasure fully asynchronously so the main thread
-// is never blocked on disk I/O for large chapter/series directories.
 
 ipcMain.handle("fs:deleteSeries", async (_, seriesDir) => {
   try {
