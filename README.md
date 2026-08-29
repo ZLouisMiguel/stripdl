@@ -10,7 +10,6 @@
 
 </div>
 
-
 ## What it is
 
 Strip is two things that work together:
@@ -29,10 +28,11 @@ Strip Reader is a three-panel desktop app built on Electron:
 **Reader** — a vertical scrolling reader, identical to reading on the web. Images lazy-load as you scroll and the next chapter is preloaded in the background so chapter transitions are instant. Navigate with the toolbar or keyboard shortcuts (`j` / `k`, `n` / `p`, `b` to go back, `g` to jump to a chapter).
 
 **Settings** — grouped configuration cards:
-- *Storage* — download directory
-- *Downloads* — concurrent chapters, concurrent images per chapter, request rate limit
-- *Reader* — lazy loading toggle, preload next chapter toggle
-- *Appearance* — light / dark / system theme
+
+- _Storage_ — download directory
+- _Downloads_ — concurrent chapters, concurrent images per chapter, request rate limit
+- _Reader_ — lazy loading toggle, preload next chapter toggle
+- _Appearance_ — light / dark / system theme
 
 **Download tray** — a persistent bottom drawer that handles downloads without navigating away from what you're reading. Paste a URL, hit start, and a live progress card appears showing per-chapter progress bars with page counts. Multiple jobs queue automatically. The tray stays open across navigation and collapses to a badge when minimised.
 
@@ -68,7 +68,7 @@ stripdl config --set image_quality=90
 ### Reader app
 
 ```bash
-cd electron-app
+cd desktop
 npm install
 npm start
 ```
@@ -87,7 +87,7 @@ cd strip
 pip install -e .
 
 # Reader
-cd electron-app
+cd desktop
 npm install
 npm start
 ```
@@ -98,17 +98,17 @@ npm start
 
 The CLI fetches the chapter list and downloads images concurrently in a pipeline — chapter 1 starts downloading as soon as the first page of the chapter list arrives, without waiting for the full list:
 
-```
-background thread                       download pool (3 workers)
-─────────────────                       ─────────────────────────
+background thread download pool (3 workers)
+───────────────── ─────────────────────────
 iter_chapter_list()
-  page 1 fetched  ──► sort ascending ──►  chapter  1 starts
-  page 2 fetched  ──► push to queue  ──►  chapter  2 starts
-  page 3 fetched  ──► push to queue  ──►  chapter  3 starts
-  ...
-```
+page 1 fetched ──► sort ascending ──► chapter 1 starts
+page 2 fetched ──► push to queue ──► chapter 2 starts
+page 3 fetched ──► push to queue ──► chapter 3 starts
+...
 
 Within each chapter, images are downloaded concurrently (4 threads by default) through a shared session with automatic connection retry and exponential backoff.
+
+> **Note:** discovery and downloading are not fully pipelined in the current implementation — every chapter is discovered and sorted ascending by chapter number _before_ any of them are queued for download, so that resuming a series always restarts from chapter 1 rather than whatever chapter Webtoons happens to list first (Webtoons returns chapters newest-first). The diagram above describes the intended/target architecture; see the comment block at the top of `core/strip/downloader.py` for the current behavior and the trade-off involved.
 
 ### Resume
 
@@ -118,11 +118,9 @@ Interrupted downloads resume cleanly. Each chapter directory gets a `.complete` 
 
 The reader spawns the CLI as a child process for downloads and reads the library directly from disk — no server required:
 
-```
-Electron renderer  →  main process  →  spawn stripdl --json-progress
-                                              ↓ stdout JSON lines
-                       main process  →  ipcRenderer  →  Electron renderer
-```
+Electron renderer → main process → spawn stripdl --json-progress
+↓ stdout JSON lines
+main process → ipcRenderer → Electron renderer
 
 JSON event stream (subset):
 
@@ -137,65 +135,64 @@ JSON event stream (subset):
 
 ## Folder structure
 
-```
 ~/strip-data/
 └── Tower_of_God/
-    ├── metadata.json         ← title, author, description, cover URL
-    ├── cover.jpg
-    ├── 001/
-    │   ├── metadata.json     ← chapter number, title, date
-    │   ├── .complete         ← written when chapter finishes (resume sentinel)
-    │   ├── 001_001.jpg
-    │   ├── 001_002.jpg
-    │   └── ...
-    └── 002/
-        └── ...
-```
+├── metadata.json ← title, author, description, cover URL
+├── cover.jpg
+├── 001/
+│ ├── metadata.json ← chapter number, title, date
+│ ├── .complete ← written when chapter finishes (resume sentinel)
+│ ├── 001_001.jpg
+│ ├── 001_002.jpg
+│ └── ...
+└── 002/
+└── ...
+
+Half-chapters (e.g. episode 12.5) get their own distinct folder, e.g. `012_5/`, rather than sharing a folder with chapter 12.
 
 ## Download options
 
-```
 stripdl download [OPTIONS] URL
-```
 
-| Option | Short | Description |
-| --- | --- | --- |
-| `--chapters RANGE` | `-c` | Range `1-20` or comma list `1,3,5` |
-| `--start N` | `-s` | Download from chapter N through the latest |
-| `--output PATH` | `-o` | Override download directory for this run |
-| `--chapter-concurrency N` | | Parallel chapters (default: 3) |
-| `--image-concurrency N` | | Parallel images per chapter (default: 4) |
-| `--rate-limit N` | | Max requests/sec across all threads (default: 8) |
-| `--no-cache` | | Ignore cached series metadata |
-| `--verify` | | SHA-256 integrity check after each image |
+| Option                    | Short | Description                                                    |
+| ------------------------- | ----- | -------------------------------------------------------------- |
+| `--chapters RANGE`        | `-c`  | Range `1-20` or comma list `1,3,5`                             |
+| `--start N`               | `-s`  | Download from chapter N through the latest                     |
+| `--output PATH`           | `-o`  | Override download directory for this run                       |
+| `--chapter-concurrency N` |       | Parallel chapters (default: 3)                                 |
+| `--image-concurrency N`   |       | Parallel images per chapter (default: 4)                       |
+| `--rate-limit N`          |       | Max requests/sec across all threads (default: 8)               |
+| `--cache-ttl N`           |       | Days to reuse cached series metadata for this run (default: 7) |
+| `--no-cache`              |       | Ignore cached series metadata; shorthand for `--cache-ttl 0`   |
+| `--overwrite`             |       | Re-download chapters even if already marked complete           |
+| `--verify`                |       | SHA-256 integrity check after each image                       |
 
 `--chapters` and `--start` are mutually exclusive. Without either, all chapters download from chapter 1.
-
 
 ## Configuration
 
 `~/.strip/config.json` — view and edit with `stripdl config`:
 
-| Key | Default | Description |
-| --- | --- | --- |
-| `download_dir` | `~/strip-data` | Where to save comics |
-| `image_quality` | `85` | JPEG save quality (1–95) |
-| `max_concurrent_chapters` | `3` | Chapters downloaded in parallel |
-| `image_concurrency` | `4` | Images downloaded in parallel per chapter |
-| `max_concurrent_jobs` | `2` | Simultaneous series jobs in the Electron queue |
-| `rate_limit` | `8.0` | Max requests/sec across all threads (0 = unlimited) |
-| `verify_integrity` | `false` | SHA-256 verify every image on download |
-| `cache_ttl_days` | `7` | Days to reuse cached series metadata (0 = always re-fetch) |
-| `overwrite` | `false` | Re-download already completed chapters |
-| `lazy_loading` | `true` | Lazy-load images in the reader |
-| `preload_next_chapter` | `true` | Pre-fetch next chapter images while reading |
-| `theme` | `"system"` | `"light"` / `"dark"` / `"system"` |
+| Key                       | Default        | Description                                                |
+| ------------------------- | -------------- | ---------------------------------------------------------- |
+| `download_dir`            | `~/strip-data` | Where to save comics                                       |
+| `image_quality`           | `85`           | JPEG save quality (1–95)                                   |
+| `max_concurrent_chapters` | `3`            | Chapters downloaded in parallel                            |
+| `image_concurrency`       | `4`            | Images downloaded in parallel per chapter                  |
+| `max_concurrent_jobs`     | `2`            | Simultaneous series jobs in the Electron queue             |
+| `rate_limit`              | `8.0`          | Max requests/sec across all threads (0 = unlimited)        |
+| `verify_integrity`        | `false`        | SHA-256 verify every image on download                     |
+| `cache_ttl_days`          | `7`            | Days to reuse cached series metadata (0 = always re-fetch) |
+| `overwrite`               | `false`        | Re-download already completed chapters                     |
+| `lazy_loading`            | `true`         | Lazy-load images in the reader                             |
+| `preload_next_chapter`    | `true`         | Pre-fetch next chapter images while reading                |
+| `theme`                   | `"system"`     | `"light"` / `"dark"` / `"system"`                          |
 
 ## Adding support for new sites
 
-1. Create `strip/parsers/mysite.py` subclassing `SiteParser`
+1. Create `core/strip/parsers/mysite.py` subclassing `SiteParser`
 2. Implement the required methods
-3. Register in `strip/parsers/__init__.py`
+3. Register in `core/strip/parsers/__init__.py`
 
 ```python
 from strip.parsers.base import SiteParser, SeriesInfo, ChapterInfo
@@ -224,10 +221,10 @@ Optionally add `iter_chapter_list(url)` as a generator that yields `ChapterInfo`
 python build_cli.py
 # → dist/stripdl.exe  (Windows)
 # → dist/stripdl      (macOS / Linux)
-# → also copied to electron-app/resources/strip-cli/
+# → also copied to desktop/resources/strip-cli/
 
 # Package the full desktop app
-cd electron-app
+cd desktop
 npm run build        # current platform
 npm run build:win    # Windows  (.exe installer)
 npm run build:mac    # macOS    (.dmg)
@@ -236,23 +233,29 @@ npm run build:linux  # Linux    (.AppImage)
 
 ## Platform notes
 
-| Platform | Note |
-| --- | --- |
-| Windows | CLI named `stripdl` to avoid conflict with GNU Binutils `strip.exe` |
-| Windows | `file://` image paths use forward slashes (`filePath.replace(/\\/g, "/")`) |
-
+| Platform | Note                                                                       |
+| -------- | -------------------------------------------------------------------------- |
+| Windows  | CLI named `stripdl` to avoid conflict with GNU Binutils `strip.exe`        |
+| Windows  | `file://` image paths use forward slashes (`filePath.replace(/\\/g, "/")`) |
 
 ## Changelog
 
 ### v0.3.1
+
 - **fix:** Chapter-list pagination infinite loop — Webtoons echoes the last valid page for out-of-range requests; pagination now terminates via episode-number deduplication
 - **fix:** Downloads were starting from the newest chapter — list sorted ascending before the download queue is populated so chapter 1 always downloads first
 - **fix:** Connection timeouts — persistent `Session` + `HTTPAdapter(Retry(...))` replaces bare `requests.get()` for automatic retry on TCP failures and 5xx responses
 - **fix:** Removed 0.3 s artificial sleep between chapter-list page requests
 - **fix:** `build_cli.py` now auto-installs PyInstaller if not present instead of crashing
 - **feat:** `--start N` / `-s N` — download from chapter N through the latest
+- **fix:** Broken `core.strip` import paths in cached series-info lookup and `config --reset`, both of which raised `ModuleNotFoundError`
+- **fix:** `SeriesLock`'s stale-lock check could call `TerminateProcess` on an unrelated process on Windows; replaced with a query-only PID check
+- **fix:** Half-chapters (e.g. 12.5) collided with their preceding whole chapter on disk, silently overwriting images/metadata; each chapter number now gets a distinct folder
+- **fix:** Series-metadata cache lookups compared against the raw user-provided URL instead of its canonical form, so `/viewer` links never hit the cache
+- **feat:** `--cache-ttl N` and `--overwrite` exposed as CLI flags (previously `--overwrite` was `config`-only, and there was no way to set a non-zero/non-default cache TTL from the CLI or the desktop app)
 
 ### v0.3.0
+
 - Concurrent chapter downloads with configurable worker count
 - Pipelined chapter-list fetch and image download
 - Partial chapter resume — only missing images re-downloaded
@@ -264,15 +267,18 @@ npm run build:linux  # Linux    (.AppImage)
 - Right-click context menus, keyboard shortcuts, toast notifications in Electron app
 
 ### v0.2.1
+
 - Fixed frozen "Fetching chapter list…" progress spinner
 
 ### v0.2.0
+
 - Sequential chapter downloads (fixed ThreadPoolExecutor ordering bug)
 - Rate-limit backoff on 429/503
 - Correct cover image extraction
 - Persistent download tray in Electron app
 
 ### v0.1.0
+
 - Initial release
 
 ## Contributing
@@ -280,6 +286,7 @@ npm run build:linux  # Linux    (.AppImage)
 Contributions are welcome — bug fixes, new site parsers, Electron UX improvements, and documentation all count.
 
 See **[CONTRIBUTING.md](CONTRIBUTING.md)** for:
+
 - Development setup (Python CLI + Electron app)
 - How to write a new site parser
 - Code conventions and commit message format
