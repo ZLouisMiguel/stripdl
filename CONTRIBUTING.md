@@ -19,29 +19,29 @@ Thanks for your interest in contributing. This document covers everything you ne
 
 ## Project structure
 
-```
 strip/
-├── strip/                      # Python package (CLI + downloader)
-│   ├── cli.py                  # Click commands, Rich progress display
-│   ├── downloader.py           # Pipeline orchestrator, chapter/image download
-│   ├── config.py               # ~/.strip/config.json wrapper
-│   ├── library.py              # Scans local download directory
-│   └── parsers/
-│       ├── base.py             # SiteParser ABC, SeriesInfo, ChapterInfo
-│       ├── __init__.py         # Parser registry (PARSERS list + get_parser())
-│       └── webtoons.py         # Webtoons.com implementation
-├── electron-app/
-│   ├── main/
-│   │   ├── index.js            # Main process: IPC handlers, CLI subprocess
-│   │   └── preload.js          # contextBridge API exposed to renderer
-│   └── src/
-│       ├── index.html          # App shell
-│       ├── js/app.js           # All renderer logic (library, reader, tray, settings)
-│       └── css/main.css        # All styles
-├── build_cli.py                # PyInstaller wrapper
-├── requirements.txt
-└── setup.py
-```
+├── core/
+│ ├── strip/ # Python package (CLI + downloader)
+│ │ ├── cli.py # Click commands, Rich progress display
+│ │ ├── downloader.py # Pipeline orchestrator, chapter/image download
+│ │ ├── config.py # ~/.strip/config.json wrapper
+│ │ ├── library.py # Scans local download directory
+│ │ └── parsers/
+│ │ ├── base.py # SiteParser ABC, SeriesInfo, ChapterInfo
+│ │ ├── init.py # Parser registry (PARSERS list + get_parser())
+│ │ └── webtoons.py # Webtoons.com implementation
+│ ├── requirements.txt
+│ └── setup.py
+├── desktop/
+│ ├── main/
+│ │ ├── index.js # Main process: IPC handlers, CLI subprocess
+│ │ ├── configKeys.js # Electron config key -> CLI flag mapping
+│ │ └── preload.js # contextBridge API exposed to renderer
+│ └── src/
+│ ├── index.html # App shell
+│ ├── js/app.js # All renderer logic (library, reader, tray, settings)
+│ └── css/main.css # All styles
+└── build_cli.py # PyInstaller wrapper
 
 ---
 
@@ -51,7 +51,7 @@ strip/
 
 ```bash
 git clone https://github.com/ZLouisMiguel/strip.git
-cd strip
+cd strip/core
 
 # Install in editable mode — changes to strip/ take effect immediately
 pip install -e .
@@ -65,7 +65,7 @@ stripdl --version
 ### Electron app
 
 ```bash
-cd electron-app
+cd desktop
 npm install
 npm start           # opens the app in development mode
 npm run dev         # same, with --dev flag for extra logging
@@ -86,6 +86,7 @@ The Electron app spawns `stripdl` from `PATH` during development (`npm start`) a
 ### Bug reports
 
 Open an issue with:
+
 - What you ran (URL, command, OS, Python version)
 - The full error output or unexpected behaviour
 - Whether it's reproducible — if so, steps to reproduce
@@ -101,6 +102,7 @@ The most impactful contribution. See [Adding a new site parser](#adding-a-new-si
 ### Improving the Electron app
 
 Good places to look:
+
 - UX improvements to the download tray or reader toolbar
 - Better error surfaces (the app currently shows raw CLI error strings in some cases)
 - Keyboard shortcut gaps
@@ -108,7 +110,7 @@ Good places to look:
 
 ### Configuration and CLI flags
 
-New `stripdl` options that are broadly useful — things like `--output` overrides, new filter modes, or better progress output.
+New `stripdl` options that are broadly useful — things like `--output` overrides, new filter modes, or better progress output. If a new option should also be settable from the desktop app, add it to `desktop/main/configKeys.js` rather than hand-writing another branch in `download:start`.
 
 ### Documentation
 
@@ -118,12 +120,12 @@ Fixing errors in the README or this file, or adding examples and explanations th
 
 ## Adding a new site parser
 
-All site-specific scraping lives in `strip/parsers/`. Adding a parser for a new site requires three files to touch and zero changes to the downloader or CLI.
+All site-specific scraping lives in `core/strip/parsers/`. Adding a parser for a new site requires three files to touch and zero changes to the downloader or CLI.
 
 ### 1. Create the parser file
 
 ```python
-# strip/parsers/mysite.py
+# core/strip/parsers/mysite.py
 
 from strip.parsers.base import SiteParser, SeriesInfo, ChapterInfo
 
@@ -169,10 +171,12 @@ class MySiteParser(SiteParser):
         return {"Referer": "https://mysite.com/", "User-Agent": "..."}
 ```
 
+If a series can be reached via more than one URL shape (e.g. a chapter-reader URL vs. the series landing page), also override `canonicalize_url()` so the downloader's series-info cache can key on one consistent form — see `WebtoonsParser.canonicalize_url()` for a working example.
+
 ### 2. Register it
 
 ```python
-# strip/parsers/__init__.py
+# core/strip/parsers/__init__.py
 
 from strip.parsers.webtoons import WebtoonsParser
 from strip.parsers.mysite import MySiteParser   # ← add this
@@ -185,7 +189,7 @@ PARSERS = [
 
 ### 3. Optional — add `iter_chapter_list` for faster downloads
 
-If the site paginates its chapter list, implementing `iter_chapter_list` as a generator lets the downloader start fetching images from the first page of results while later pages are still loading — instead of waiting for the complete list.
+If the site paginates its chapter list, implementing `iter_chapter_list` as a generator lets the downloader report live discovery progress as pages arrive, instead of the progress display sitting frozen until the entire list has been fetched.
 
 ```python
 from typing import Iterator
@@ -193,7 +197,9 @@ from typing import Iterator
 def iter_chapter_list(self, url: str) -> Iterator[ChapterInfo]:
     """
     Yield ChapterInfo objects as each list page arrives.
-    The downloader uses this to pipeline discovery and downloading.
+    The downloader uses this to report live discovery progress; note that
+    it still collects and sorts the full list before any chapter is queued
+    for download (see the comment at the top of core/strip/downloader.py).
     Falls back to get_chapter_list() if not implemented.
     """
     page = 1
@@ -230,11 +236,14 @@ contextBridge.exposeInMainWorld('strip', {
 });
 ```
 
+If your new IPC handler needs to spawn `stripdl download` with a new config-driven flag, add it to `DOWNLOAD_CONFIG_FLAGS` in `main/configKeys.js` rather than adding another `if (cfg.x) args.push(...)` line directly in `download:start`.
+
 ### Renderer (`src/js/app.js`)
 
 There is no bundler. `app.js` is a single vanilla JS file loaded directly by `index.html`. Keep it that way — no build step means anyone can open the file and read it without tooling.
 
 When adding UI:
+
 - Add the HTML structure to `index.html`
 - Add styles to `main.css`
 - Wire behaviour in `app.js`
@@ -255,6 +264,7 @@ The renderer communicates with the main process exclusively through `window.stri
 - **Error handling:** never silently swallow exceptions in the downloader. Either re-raise, emit a JSON error event (`_emit({"status": "error", ...})`), or call `progress_cb` with `status="error"`. Users need to know when something failed.
 - **Threading:** the downloader uses `ThreadPoolExecutor` and `queue.Queue`. If you add shared mutable state, protect it with a `threading.Lock`. Keep locks narrow — don't hold one across I/O.
 - **HTTP:** always use the module-level `_session` (a `requests.Session`) rather than bare `requests.get()`. This ensures connection pooling and retry are active.
+- **Chapter paths:** never build a chapter directory or filename with `int(chapter.number)` directly — use `downloader._chapter_dirname()`, which correctly distinguishes half-chapters (e.g. 12 vs. 12.5) instead of truncating them into the same folder.
 
 ### JavaScript
 
@@ -272,11 +282,12 @@ See [Commit message format](#commit-message-format) below.
 ## Submitting changes
 
 1. Fork the repository and create a branch from `main`:
-   ```bash
+
+```bash
    git checkout -b fix/webtoons-pagination
    # or
    git checkout -b feat/mangadex-parser
-   ```
+```
 
 2. Make your changes. Keep each commit focused on one thing.
 
@@ -290,38 +301,32 @@ See [Commit message format](#commit-message-format) below.
 
 ## Commit message format
 
-```
 type(scope): short description in imperative mood
 
 Optional longer explanation. Wrap at 72 characters.
 Explain what changed and why, not how (the diff shows that).
-```
 
 **Types:**
 
-| Type | When to use |
-| --- | --- |
-| `feat` | New feature or behaviour |
-| `fix` | Bug fix |
-| `refactor` | Code change with no behaviour change |
-| `docs` | README, CONTRIBUTING, comments |
-| `chore` | Dependencies, build config, version bumps |
-| `test` | Adding or fixing tests |
+| Type       | When to use                               |
+| ---------- | ----------------------------------------- |
+| `feat`     | New feature or behaviour                  |
+| `fix`      | Bug fix                                   |
+| `refactor` | Code change with no behaviour change      |
+| `docs`     | README, CONTRIBUTING, comments            |
+| `chore`    | Dependencies, build config, version bumps |
+| `test`     | Adding or fixing tests                    |
 
 **Scopes:** `cli`, `downloader`, `webtoons`, `electron`, `build`, `config`, `docs` — or the name of a new parser (e.g. `mangadex`).
 
 **Examples:**
 
-```
 feat(cli): add --start / -s option to download from a specific chapter
 
 fix(webtoons): stop chapter-list pagination via dedup, not len < 10
 
 chore: bump version to 0.3.1
-```
 
 ---
 
 ## Questions
-
-Open a discussion or issue on GitHub.
