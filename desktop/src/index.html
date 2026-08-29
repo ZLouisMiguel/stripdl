@@ -45,7 +45,7 @@
           </a>
         </li>
         <li>
-          <a
+          
             href="#"
             data-action="open-tray"
             class="nav-link"
@@ -413,6 +413,18 @@
             </div>
             <div class="setting-row">
               <div>
+                <div class="setting-label">Overwrite existing chapters</div>
+                <div class="setting-desc muted">
+                  Re-download chapters even if already marked complete.
+                </div>
+              </div>
+              <label class="toggle">
+                <input type="checkbox" id="setting-overwrite" />
+                <span class="toggle-slider"></span>
+              </label>
+            </div>
+            <div class="setting-row">
+              <div>
                 <div class="setting-label">Max simultaneous jobs</div>
                 <div class="setting-desc muted">
                   Queue additional jobs beyond this limit.
@@ -474,7 +486,7 @@
           <!-- About -->
           <div class="settings-group card">
             <h2 class="settings-group-title">About</h2>
-            <p class="muted">strip v0.3.0 — webtoon downloader &amp; reader</p>
+            <p class="muted">strip v0.3.1 — webtoon downloader &amp; reader</p>
           </div>
         </div>
       </section>
