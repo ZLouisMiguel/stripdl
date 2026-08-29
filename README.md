@@ -41,6 +41,7 @@ Strip Reader is a three-panel desktop app built on Electron:
 ### CLI
 
 ```bash
+cd core
 pip install -e .
 
 # Full series — oldest chapter first
@@ -83,8 +84,10 @@ npm start
 git clone https://github.com/yourname/strip.git
 cd strip
 
-# CLI
+# CLI (package lives under core/)
+cd core
 pip install -e .
+cd ..
 
 # Reader
 cd desktop
@@ -253,6 +256,8 @@ npm run build:linux  # Linux    (.AppImage)
 - **fix:** Half-chapters (e.g. 12.5) collided with their preceding whole chapter on disk, silently overwriting images/metadata; each chapter number now gets a distinct folder
 - **fix:** Series-metadata cache lookups compared against the raw user-provided URL instead of its canonical form, so `/viewer` links never hit the cache
 - **feat:** `--cache-ttl N` and `--overwrite` exposed as CLI flags (previously `--overwrite` was `config`-only, and there was no way to set a non-zero/non-default cache TTL from the CLI or the desktop app)
+- **refactor:** Electron's download-config-to-CLI-flag translation centralized in `desktop/main/configKeys.js` instead of hand-written per-setting branches
+- **docs:** Fixed `electron-app/` → `desktop/` and root-level → `core/` path references throughout README and CONTRIBUTING
 
 ### v0.3.0
 
