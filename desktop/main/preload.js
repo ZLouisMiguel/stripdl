@@ -1,4 +1,4 @@
-// desktop/main/preload.js  — v2
+// desktop/main/preload.js  — v3
 // Secure contextBridge exposing only named APIs to the renderer.
 
 const { contextBridge, ipcRenderer } = require("electron");
@@ -32,6 +32,21 @@ contextBridge.exposeInMainWorld("strip", {
     offProgress: (cb) => {
       if (cb) ipcRenderer.removeListener("download:progress", cb);
       else ipcRenderer.removeAllListeners("download:progress");
+    },
+  },
+
+  // Per-series "auto-download on release day" schedules.
+  schedule: {
+    get: () => ipcRenderer.invoke("schedule:get"),
+    set: (seriesKey, patch) =>
+      ipcRenderer.invoke("schedule:set", seriesKey, patch),
+    runNow: () => ipcRenderer.invoke("schedule:runNow"),
+    onEvent: (cb) => {
+      ipcRenderer.on("schedule:event", (_, data) => cb(data));
+    },
+    offEvent: (cb) => {
+      if (cb) ipcRenderer.removeListener("schedule:event", cb);
+      else ipcRenderer.removeAllListeners("schedule:event");
     },
   },
 
