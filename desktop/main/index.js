@@ -1,5 +1,5 @@
 // desktop/main/index.js
-// Main process: windows, IPC, Python CLI subprocess, context menus.
+// Main process: windows, IPC, Python CLI subprocess, context menus, scheduler.
 
 const {
   app,
@@ -9,11 +9,14 @@ const {
   shell,
   nativeTheme,
   Menu,
+  Notification,
+  powerMonitor,
 } = require("electron");
 const path = require("path");
 const fs = require("fs");
 const { spawn } = require("child_process");
 const { buildDownloadConfigArgs } = require("./configKeys");
+const { startScheduler } = require("./scheduler");
 
 const isDev = process.argv.includes("--dev");
 
@@ -41,6 +44,9 @@ function loadConfig() {
     overwrite: false,
     lazyLoading: true,
     preloadNextChapter: true,
+    // seriesKey (series directory) -> { url, title, enabled, days,
+    // lastRun, lastResult, lastDownloadedCount, lastError, lastCheckedAt }
+    schedules: {},
   };
 }
 
@@ -49,6 +55,8 @@ function saveConfig(cfg) {
 }
 
 let appConfig = loadConfig();
+// Upgrade path for config.json files saved before the scheduler existed.
+if (!appConfig.schedules) appConfig.schedules = {};
 
 // ──────────────────────────────────────────────────────────────────
 //  Window management
@@ -85,10 +93,15 @@ app.whenReady().then(() => {
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) createMainWindow();
   });
+  initScheduler();
 });
 
 app.on("window-all-closed", () => {
   if (process.platform !== "darwin") app.quit();
+});
+
+app.on("before-quit", () => {
+  if (scheduler) scheduler.stop();
 });
 
 // ──────────────────────────────────────────────────────────────────
@@ -128,11 +141,6 @@ ipcMain.handle("config:set", (_, updates) => {
 // downloader._chapter_dirname():
 //   "012"   -> whole chapter 12
 //   "012_5" -> half chapter 12.5
-// Previously this was a plain /^\d+$/ test, which stopped matching
-// half-chapter folders once the Python downloader started rendering them
-// as "012_5" instead of colliding them with "012" — those chapters would
-// silently vanish from the library view even though the fix to disk
-// layout was correct.
 const CHAPTER_DIR_RE = /^(\d+)(?:_(\d))?$/;
 
 ipcMain.handle("library:scan", () => {
@@ -222,22 +230,30 @@ ipcMain.handle("progress:set", (_, key, pageIndex) => {
 
 const activeDownloads = new Map();
 
-ipcMain.handle("download:start", (event, { url, chapters, downloadDir }) => {
+/**
+ * Spawn `stripdl download` and stream its JSON progress to the renderer
+ * (if a window exists) over the same "download:progress" channel used by
+ * manual downloads, so the tray reflects auto-triggered downloads too.
+ *
+ * Returns { downloadId, done }. `done` resolves once the process exits
+ * with { downloadedCount, hadError, errorMessage } — it never rejects;
+ * spawn/runtime failures are captured in the resolved value so callers (in
+ * particular the scheduler) don't need their own try/catch around every
+ * possible failure mode.
+ */
+function spawnDownload({ url, chapters, downloadDir, extraArgs = [] }) {
   const args = ["download", url, "--json-progress"];
   if (chapters) args.push("--chapters", chapters);
   if (downloadDir) args.push("--output", downloadDir);
-
-  // Every download-affecting Electron setting (concurrency, rate limit,
-  // cache TTL, verify, overwrite) is translated to its CLI flag via one
-  // shared table (configKeys.js) instead of a hand-written branch per
-  // setting here — see that file for why.
   args.push(...buildDownloadConfigArgs(appConfig));
+  args.push(...extraArgs);
 
   const cliPath = getStripCliPath();
-  const child = spawn(cliPath, args, { env: { ...process.env } });
-
   const downloadId = `dl_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
-  activeDownloads.set(downloadId, child);
+
+  let downloadedCount = 0;
+  let hadError = false;
+  let errorMessage = null;
 
   const send = (payload) => {
     if (mainWindow && !mainWindow.isDestroyed())
@@ -247,25 +263,75 @@ ipcMain.handle("download:start", (event, { url, chapters, downloadDir }) => {
       });
   };
 
-  child.stdout.on("data", (data) => {
-    for (const line of data.toString().split("\n").filter(Boolean)) {
-      try {
-        send(JSON.parse(line));
-      } catch (_) {
-        send({ status: "log", message: line });
-      }
+  const done = new Promise((resolve) => {
+    let child;
+    try {
+      child = spawn(cliPath, args, { env: { ...process.env } });
+    } catch (e) {
+      // Synchronous spawn failure (rare, platform-dependent) — resolve
+      // rather than throw so callers never need to wrap this in try/catch.
+      resolve({ downloadedCount: 0, hadError: true, errorMessage: e.message });
+      return;
     }
+
+    activeDownloads.set(downloadId, child);
+
+    // Previously unhandled: an 'error' event on a ChildProcess with no
+    // listener is an uncaught, fatal exception in Node. If `stripdl` isn't
+    // on PATH (or the bundled binary is missing in a packaged build),
+    // spawn() emits 'error' asynchronously — this listener is what stops
+    // that from crashing the entire main process instead of just failing
+    // the one download.
+    child.on("error", (e) => {
+      hadError = true;
+      errorMessage = e.message;
+      send({ status: "error", message: e.message });
+      activeDownloads.delete(downloadId);
+      resolve({ downloadedCount, hadError, errorMessage });
+    });
+
+    child.stdout.on("data", (data) => {
+      for (const line of data.toString().split("\n").filter(Boolean)) {
+        let parsed = null;
+        try {
+          parsed = JSON.parse(line);
+        } catch (_) {
+          send({ status: "log", message: line });
+          continue;
+        }
+        if (parsed.status === "chapter_done") downloadedCount++;
+        if (
+          parsed.status === "error" &&
+          !parsed.chapter &&
+          !parsed.chapter_id
+        ) {
+          hadError = true;
+          errorMessage = parsed.message;
+        }
+        send(parsed);
+      }
+    });
+
+    child.stderr.on("data", (data) => {
+      send({ status: "error", message: data.toString() });
+    });
+
+    child.on("close", (code) => {
+      activeDownloads.delete(downloadId);
+      send({ status: "process_exit", code });
+      if (code !== 0 && !hadError) {
+        hadError = true;
+        errorMessage = `stripdl exited with code ${code}`;
+      }
+      resolve({ downloadedCount, hadError, errorMessage });
+    });
   });
 
-  child.stderr.on("data", (data) => {
-    send({ status: "error", message: data.toString() });
-  });
+  return { downloadId, done };
+}
 
-  child.on("close", (code) => {
-    activeDownloads.delete(downloadId);
-    send({ status: "process_exit", code });
-  });
-
+ipcMain.handle("download:start", (event, { url, chapters, downloadDir }) => {
+  const { downloadId } = spawnDownload({ url, chapters, downloadDir });
   return downloadId;
 });
 
@@ -280,6 +346,96 @@ ipcMain.handle("download:cancel", (_, downloadId) => {
 });
 
 ipcMain.handle("download:active", () => [...activeDownloads.keys()]);
+
+// ──────────────────────────────────────────────────────────────────
+//  Scheduler — per-series "auto-download on release day"
+// ──────────────────────────────────────────────────────────────────
+//
+// Each series can be subscribed to specific local weekdays (e.g. "every
+// Thursday"). A background tick (desktop/main/scheduler.js) checks, at
+// most every 15 minutes, whether today is a scheduled day for a series
+// that hasn't already been checked today — and if the machine is online,
+// runs a normal `stripdl download` for it, which naturally only pulls
+// chapters that aren't already on disk via the existing resume logic.
+//
+// Schedules are keyed by series directory (stable across renames of the
+// download root) and persisted in appConfig.schedules.
+
+let scheduler = null;
+
+function notifySchedule(entry, result) {
+  const title = entry.title || "Series";
+
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send("schedule:event", {
+      title,
+      downloaded: result.downloadedCount || 0,
+      error: result.errorMessage || null,
+    });
+  }
+
+  if (!Notification.isSupported()) return;
+  // Only surface a native notification when there's something worth
+  // interrupting the user for — new chapters, or a failure they'd want to
+  // know about. A "checked, nothing new" result stays silent.
+  if (result.hadError) {
+    new Notification({
+      title: `Strip — couldn't check ${title}`,
+      body: result.errorMessage || "Auto-download check failed.",
+    }).show();
+  } else if (result.downloadedCount > 0) {
+    new Notification({
+      title: `${title} — new chapter${result.downloadedCount > 1 ? "s" : ""}!`,
+      body: `${result.downloadedCount} new chapter${result.downloadedCount > 1 ? "s" : ""} downloaded.`,
+    }).show();
+  }
+}
+
+function initScheduler() {
+  scheduler = startScheduler({
+    getSchedules: () => appConfig.schedules,
+    updateSchedule: (seriesKey, patch) => {
+      if (!appConfig.schedules[seriesKey]) return;
+      appConfig.schedules[seriesKey] = {
+        ...appConfig.schedules[seriesKey],
+        ...patch,
+      };
+      saveConfig(appConfig);
+    },
+    runCheck: async (seriesKey, entry) => {
+      const { done } = spawnDownload({
+        url: entry.url,
+        downloadDir: appConfig.downloadDir,
+      });
+      const result = await done;
+      notifySchedule(entry, result);
+      return {
+        downloaded: result.downloadedCount,
+        error: result.hadError ? result.errorMessage : undefined,
+      };
+    },
+  });
+
+  // Catch up promptly after the machine wakes from sleep, rather than
+  // waiting for the next 15-minute tick — this is the main real-world case
+  // where "today's schedule" and "actually online" become true at the same
+  // moment (laptop closed overnight, opened Thursday morning).
+  powerMonitor.on("resume", () => scheduler.runNow());
+}
+
+ipcMain.handle("schedule:get", () => appConfig.schedules);
+
+ipcMain.handle("schedule:set", (_, seriesKey, patch) => {
+  const existing = appConfig.schedules[seriesKey] || {};
+  appConfig.schedules[seriesKey] = { ...existing, ...patch };
+  saveConfig(appConfig);
+  return appConfig.schedules[seriesKey];
+});
+
+ipcMain.handle("schedule:runNow", async () => {
+  if (scheduler) await scheduler.runNow();
+  return true;
+});
 
 // ──────────────────────────────────────────────────────────────────
 //  IPC — File system operations
