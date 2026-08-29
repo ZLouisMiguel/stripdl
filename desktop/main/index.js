@@ -13,6 +13,7 @@ const {
 const path = require("path");
 const fs = require("fs");
 const { spawn } = require("child_process");
+const { buildDownloadConfigArgs } = require("./configKeys");
 
 const isDev = process.argv.includes("--dev");
 
@@ -226,23 +227,11 @@ ipcMain.handle("download:start", (event, { url, chapters, downloadDir }) => {
   if (chapters) args.push("--chapters", chapters);
   if (downloadDir) args.push("--output", downloadDir);
 
-  // Pass Electron config values to CLI via flags
-  const cfg = appConfig;
-  if (cfg.maxConcurrentChapters)
-    args.push("--chapter-concurrency", String(cfg.maxConcurrentChapters));
-  if (cfg.imageConcurrency)
-    args.push("--image-concurrency", String(cfg.imageConcurrency));
-  if (cfg.rateLimit !== undefined)
-    args.push("--rate-limit", String(cfg.rateLimit));
-  // Previously this only ever sent --no-cache when cacheTtlDays === 0 and
-  // silently dropped every other value, so setting "Metadata cache (days)"
-  // to e.g. 3 or 30 in the Settings UI had no effect on the CLI at all.
-  // --cache-ttl now carries the actual configured value through in every
-  // case (0 included, where it behaves the same as before).
-  if (cfg.cacheTtlDays !== undefined)
-    args.push("--cache-ttl", String(cfg.cacheTtlDays));
-  if (cfg.verifyIntegrity) args.push("--verify");
-  if (cfg.overwrite) args.push("--overwrite");
+  // Every download-affecting Electron setting (concurrency, rate limit,
+  // cache TTL, verify, overwrite) is translated to its CLI flag via one
+  // shared table (configKeys.js) instead of a hand-written branch per
+  // setting here — see that file for why.
+  args.push(...buildDownloadConfigArgs(appConfig));
 
   const cliPath = getStripCliPath();
   const child = spawn(cliPath, args, { env: { ...process.env } });
