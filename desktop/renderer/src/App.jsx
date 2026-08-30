@@ -1,9 +1,8 @@
 // desktop/renderer/src/App.jsx
 //
-// View router — replaces the old showView()/document.querySelectorAll
-// pattern with React state. Sidebar and the active view are the only two
-// children of #root's grid (see styles/main.css: #root now owns the
-// two-column grid that used to live on <body>).
+// View router — wraps the app in ToastProvider/ConfirmProvider so every
+// descendant can call useToast()/useConfirm(), and renders whichever view
+// is active.
 
 import React, { useEffect, useState } from "react";
 import Sidebar from "./components/Sidebar.jsx";
@@ -11,9 +10,12 @@ import LibraryView from "./views/LibraryView.jsx";
 import SeriesDetailView from "./views/SeriesDetailView.jsx";
 import ReaderView from "./views/ReaderView.jsx";
 import SettingsView from "./views/SettingsView.jsx";
+import { ToastProvider, useToast } from "./context/ToastContext.jsx";
+import { ConfirmProvider } from "./context/ConfirmContext.jsx";
 import { applyTheme } from "./lib/theme.js";
 
-export default function App() {
+function AppShell() {
+  const { showToast } = useToast();
   const [view, setView] = useState("library");
   const [currentSeries, setCurrentSeries] = useState(null);
 
@@ -32,20 +34,30 @@ export default function App() {
     setView("series");
   }
 
+  // Shared placeholder for anything that needs the (not-yet-ported)
+  // Download tray — the Sidebar's Download nav item and Library's "Add
+  // Comic" both use this until that view exists.
+  function notifyTrayNotReady() {
+    showToast(
+      "Download tray isn't wired up yet — coming in the next pass.",
+      "info",
+    );
+  }
+
   return (
     <>
       <Sidebar
         currentView={view}
         onNavigate={setView}
-        onOpenDownloadTray={() => {
-          // Placeholder until the Download tray is ported — see
-          // views/LibraryView.jsx and the migration notes for why it's
-          // saved for a later pass.
-          console.log("Download tray: not yet ported to React.");
-        }}
+        onOpenDownloadTray={notifyTrayNotReady}
       />
       <main id="main">
-        {view === "library" && <LibraryView onOpenSeries={openSeries} />}
+        {view === "library" && (
+          <LibraryView
+            onOpenSeries={openSeries}
+            onAddComic={notifyTrayNotReady}
+          />
+        )}
         {view === "series" && (
           <SeriesDetailView
             series={currentSeries}
@@ -56,5 +68,15 @@ export default function App() {
         {view === "settings" && <SettingsView />}
       </main>
     </>
+  );
+}
+
+export default function App() {
+  return (
+    <ToastProvider>
+      <ConfirmProvider>
+        <AppShell />
+      </ConfirmProvider>
+    </ToastProvider>
   );
 }
