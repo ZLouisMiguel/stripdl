@@ -18,11 +18,6 @@ const { spawn } = require("child_process");
 const { buildDownloadConfigArgs } = require("./configKeys");
 const { startScheduler } = require("./scheduler");
 
-// True in `electron-vite dev` (HMR dev server) or when launched with
-// --dev directly. ELECTRON_RENDERER_URL is set by electron-vite's dev
-// command; its presence is the more reliable signal since it's what
-// actually determines whether we loadURL() a dev server or loadFile() the
-// built renderer below.
 const isDev =
   process.argv.includes("--dev") || !!process.env.ELECTRON_RENDERER_URL;
 
@@ -50,8 +45,6 @@ function loadConfig() {
     overwrite: false,
     lazyLoading: true,
     preloadNextChapter: true,
-    // seriesKey (series directory) -> { url, title, enabled, days,
-    // lastRun, lastResult, lastDownloadedCount, lastError, lastCheckedAt }
     schedules: {},
   };
 }
@@ -61,7 +54,6 @@ function saveConfig(cfg) {
 }
 
 let appConfig = loadConfig();
-// Upgrade path for config.json files saved before the scheduler existed.
 if (!appConfig.schedules) appConfig.schedules = {};
 
 // ──────────────────────────────────────────────────────────────────
@@ -79,22 +71,17 @@ function createMainWindow() {
     titleBarStyle: process.platform === "darwin" ? "hiddenInset" : "default",
     backgroundColor: "#f5f1e6",
     webPreferences: {
-      // electron-vite builds the preload bundle to out/preload/index.js,
-      // a sibling of out/main/index.js (where this file itself ends up
-      // after being built) — hence "../preload/index.js" rather than the
-      // old same-directory "preload.js".
-      preload: path.join(__dirname, "../preload/index.js"),
+      // Fixed: was "../preload/index.js" — wrong filename. electron-vite
+      // names the preload build output after its source file's own
+      // basename (main/preload.js), not after main's entry filename. See
+      // the note in electron.vite.config.js for the full explanation.
+      preload: path.join(__dirname, "../preload/preload.js"),
       contextIsolation: true,
       nodeIntegration: false,
-      // v2: webSecurity enabled; CSP in renderer/index.html allows file: images
       webSecurity: true,
     },
   });
 
-  // In dev, electron-vite runs a Vite dev server for the renderer (HMR)
-  // and sets ELECTRON_RENDERER_URL to its address. In a built/packaged
-  // app, that env var is absent and we load the static built HTML instead
-  // — a sibling of out/main/index.js, same layout as the preload path above.
   if (process.env.ELECTRON_RENDERER_URL) {
     mainWindow.loadURL(process.env.ELECTRON_RENDERER_URL);
   } else {
@@ -156,10 +143,6 @@ ipcMain.handle("config:set", (_, updates) => {
 //  IPC — Library scanning
 // ──────────────────────────────────────────────────────────────────
 
-// Matches chapter directory names produced by the Python side's
-// downloader._chapter_dirname():
-//   "012"   -> whole chapter 12
-//   "012_5" -> half chapter 12.5
 const CHAPTER_DIR_RE = /^(\d+)(?:_(\d))?$/;
 
 ipcMain.handle("library:scan", () => {
@@ -249,17 +232,6 @@ ipcMain.handle("progress:set", (_, key, pageIndex) => {
 
 const activeDownloads = new Map();
 
-/**
- * Spawn `stripdl download` and stream its JSON progress to the renderer
- * (if a window exists) over the same "download:progress" channel used by
- * manual downloads, so the tray reflects auto-triggered downloads too.
- *
- * Returns { downloadId, done }. `done` resolves once the process exits
- * with { downloadedCount, hadError, errorMessage } — it never rejects;
- * spawn/runtime failures are captured in the resolved value so callers (in
- * particular the scheduler) don't need their own try/catch around every
- * possible failure mode.
- */
 function spawnDownload({ url, chapters, downloadDir, extraArgs = [] }) {
   const args = ["download", url, "--json-progress"];
   if (chapters) args.push("--chapters", chapters);
@@ -287,20 +259,12 @@ function spawnDownload({ url, chapters, downloadDir, extraArgs = [] }) {
     try {
       child = spawn(cliPath, args, { env: { ...process.env } });
     } catch (e) {
-      // Synchronous spawn failure (rare, platform-dependent) — resolve
-      // rather than throw so callers never need to wrap this in try/catch.
       resolve({ downloadedCount: 0, hadError: true, errorMessage: e.message });
       return;
     }
 
     activeDownloads.set(downloadId, child);
 
-    // Previously unhandled: an 'error' event on a ChildProcess with no
-    // listener is an uncaught, fatal exception in Node. If `stripdl` isn't
-    // on PATH (or the bundled binary is missing in a packaged build),
-    // spawn() emits 'error' asynchronously — this listener is what stops
-    // that from crashing the entire main process instead of just failing
-    // the one download.
     child.on("error", (e) => {
       hadError = true;
       errorMessage = e.message;
