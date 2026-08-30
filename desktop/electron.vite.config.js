@@ -14,6 +14,16 @@
 // anyway) as external requires rather than bundling them — standard
 // practice for the main/preload side of an Electron app.
 //
+// commonjs() is what actually lets Rollup bundle main/index.js's local,
+// relative require() calls (./configKeys, ./scheduler) into the single
+// output file. Without it, Rollup only understands ES import/export for
+// tracing which local files to inline — plain require("./x") calls are
+// invisible to it and get left in the output verbatim, pointing at a file
+// that was never copied into out/main/. (This is what caused the
+// "Cannot find module './configKeys'" runtime error.) All the main and
+// preload source files stay written in plain CommonJS — no need to
+// rewrite them to import/export just to fix the build.
+//
 // fileName: () => 'index.js' pins the output filename regardless of the
 // source file's name, so main/index.js's preload path
 // (../preload/index.js) and the loadFile() path (../renderer/index.html)
@@ -21,11 +31,12 @@
 
 import { resolve } from "node:path";
 import { defineConfig, externalizeDepsPlugin } from "electron-vite";
+import commonjs from "@rollup/plugin-commonjs";
 import react from "@vitejs/plugin-react";
 
 export default defineConfig({
   main: {
-    plugins: [externalizeDepsPlugin()],
+    plugins: [externalizeDepsPlugin(), commonjs()],
     build: {
       outDir: "out/main",
       lib: {
@@ -37,7 +48,7 @@ export default defineConfig({
   },
 
   preload: {
-    plugins: [externalizeDepsPlugin()],
+    plugins: [externalizeDepsPlugin(), commonjs()],
     build: {
       outDir: "out/preload",
       lib: {
