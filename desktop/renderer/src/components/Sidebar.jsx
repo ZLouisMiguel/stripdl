@@ -1,18 +1,16 @@
 // desktop/renderer/src/components/Sidebar.jsx
 //
-// Same markup and behavior as the old hand-written <nav id="sidebar">
-// block in index.html — but as JSX, a missing/misplaced tag here is a
-// build-time syntax error, not a silent runtime string bug like the one
-// that broke this exact block before.
+// Same markup as before; the Download nav-item now shows a live badge
+// (active job count) and its click handler drives the real tray via
+// DownloadTrayContext instead of a placeholder callback.
 
 import React from "react";
 import { applyTheme } from "../lib/theme.js";
+import { useDownloadTray } from "../context/DownloadTrayContext.jsx";
 
-export default function Sidebar({
-  currentView,
-  onNavigate,
-  onOpenDownloadTray,
-}) {
+export default function Sidebar({ currentView, onNavigate }) {
+  const { handleNavClick, activeJobCount } = useDownloadTray();
+
   function toggleTheme() {
     const next =
       document.body.getAttribute("data-theme") === "dark" ? "light" : "dark";
@@ -51,7 +49,6 @@ export default function Sidebar({
             Library
           </a>
         </li>
-
         <li>
           <a
             href="#"
@@ -59,7 +56,7 @@ export default function Sidebar({
             id="nav-download"
             onClick={(e) => {
               e.preventDefault();
-              if (onOpenDownloadTray) onOpenDownloadTray();
+              handleNavClick();
             }}
           >
             <svg
@@ -72,14 +69,13 @@ export default function Sidebar({
               <path d="M5 20h14" />
             </svg>
             Download
-            <span
-              className="nav-download-badge"
-              id="nav-download-badge"
-              style={{ display: "none" }}
-            />
+            {activeJobCount > 0 && (
+              <span className="nav-download-badge" id="nav-download-badge">
+                {activeJobCount}
+              </span>
+            )}
           </a>
         </li>
-
         <li>
           <a
             href="#"
@@ -103,7 +99,6 @@ export default function Sidebar({
           </a>
         </li>
       </ul>
-
       <div className="sidebar-footer">
         <button id="theme-toggle" title="Toggle theme" onClick={toggleTheme}>
           <svg
