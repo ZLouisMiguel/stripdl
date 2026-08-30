@@ -8,11 +8,13 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { useLibrary } from "../hooks/useLibrary.js";
 import { useToast } from "../context/ToastContext.jsx";
+import { useDownloadTray } from "../context/DownloadTrayContext.jsx";
 import SeriesCard from "../components/SeriesCard.jsx";
 
-export default function LibraryView({ onOpenSeries, onAddComic }) {
+export default function LibraryView({ onOpenSeries }) {
   const { library, loading, error, refresh, removeSeries } = useLibrary();
   const { showToast } = useToast();
+  const { openTray } = useDownloadTray();
   const [search, setSearch] = useState("");
   const [sort, setSort] = useState("title");
 
@@ -74,7 +76,7 @@ export default function LibraryView({ onOpenSeries, onAddComic }) {
             <option value="last_read">Last Read</option>
             <option value="chapters">Most Chapters</option>
           </select>
-          <button className="btn btn-primary" onClick={onAddComic}>
+          <button className="btn btn-primary" onClick={() => openTray()}>
             <svg
               viewBox="0 0 24 24"
               fill="none"
@@ -117,7 +119,7 @@ export default function LibraryView({ onOpenSeries, onAddComic }) {
             <div className="empty-icon">◈</div>
             <p>Your library is empty.</p>
             <p className="muted">Download a webtoon to get started.</p>
-            <button className="btn btn-primary" onClick={onAddComic}>
+            <button className="btn btn-primary" onClick={() => openTray()}>
               Download something
             </button>
           </div>
