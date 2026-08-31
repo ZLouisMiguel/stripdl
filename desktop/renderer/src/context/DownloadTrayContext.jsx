@@ -5,15 +5,32 @@
 // and SeriesDetailView's "Download more" button can all reach the same
 // state without prop-drilling through App.jsx.
 //
-// Job lifecycle mirrors the old vanilla-JS DownloadTray module's
-// _onProgress() switch statement — see applyProgress() below, a pure,
-// side-effect-free port of that switch. One intentional behavior change
-// from the original: when a queued download's turn comes to start, its
-// placeholder card is replaced in place by the real job card (see
-// PROMOTE_QUEUED) rather than left behind as an orphaned "queued" card
-// while a second, separate card gets created above it — the original
-// never removed the queued placeholder once _startNextQueued() fired,
-// which was a latent display bug, not intended behavior worth preserving.
+// PERFORMANCE NOTE — read this before changing the progress pipeline:
+// Raw "progress" events (one per page saved) can arrive very frequently
+// during active downloads, especially with multiple concurrent jobs at
+// default concurrency settings. An earlier version of this file
+// dispatched a state update synchronously on every single raw IPC event,
+// which fanned out into a full re-render of every context consumer
+// (Sidebar, Library's series grid, Series detail, the tray itself) on
+// every tick — frequently enough to visibly freeze the renderer ("Not
+// Responding") during a busy download. The pre-React vanilla-JS tray
+// avoided this by batching rapid DOM updates through
+// requestAnimationFrame; that batching did not carry over when this was
+// ported to React, and this is the fix that restores it.
+//
+// Two changes from a naive per-event dispatch:
+//   1. Incoming events are buffered in pendingRef and flushed as ONE
+//      "BATCH" action per animation frame, capping render frequency at
+//      ~60/sec regardless of raw event volume. applyProgress() is still
+//      applied to every buffered event in order within the batch, so no
+//      progress data is lost or coalesced incorrectly — only the render
+//      frequency is capped, not the data fidelity.
+//   2. job.log and the per-chapter tracking map (chapters/chapterOrder)
+//      are both capped (see MAX_LOG_LINES / MAX_TRACKED_CHAPTERS) so a
+//      very large series (hundreds of chapters) doesn't grow render cost
+//      unboundedly over the life of a long download. Oldest entries are
+//      dropped first — these are almost always already-completed
+//      chapters, so nothing currently useful is lost from view.
 
 import React, {
   createContext,
@@ -22,11 +39,15 @@ import React, {
   useEffect,
   useMemo,
   useReducer,
+  useRef,
 } from "react";
 import { useConfig } from "../hooks/useConfig.js";
 import { useToast } from "./ToastContext.jsx";
 
 const DownloadTrayContext = createContext(null);
+
+const MAX_LOG_LINES = 200;
+const MAX_TRACKED_CHAPTERS = 60;
 
 const initialState = {
   isOpen: false,
@@ -53,15 +74,40 @@ function newJob(downloadId, url) {
   };
 }
 
-function ensureChapter(chapters, chapterOrder, id, title) {
-  if (chapters[id]) return { chapters, chapterOrder };
-  return {
-    chapters: {
+/** Bounded log append — keeps at most MAX_LOG_LINES, dropping the oldest. */
+function appendLog(log, entry) {
+  const next = [...log, entry];
+  return next.length > MAX_LOG_LINES
+    ? next.slice(next.length - MAX_LOG_LINES)
+    : next;
+}
+
+/**
+ * Create/touch a chapter entry, then enforce MAX_TRACKED_CHAPTERS by
+ * dropping the oldest tracked chapters (almost always already-completed
+ * ones, since chapters are appended in roughly the order they start).
+ */
+function touchChapter(chapters, chapterOrder, id, title) {
+  let nextChapters = chapters;
+  let nextOrder = chapterOrder;
+
+  if (!chapters[id]) {
+    nextChapters = {
       ...chapters,
       [id]: { title: title || null, done: 0, total: 0, statusText: "" },
-    },
-    chapterOrder: [...chapterOrder, id],
-  };
+    };
+    nextOrder = [...chapterOrder, id];
+  }
+
+  if (nextOrder.length > MAX_TRACKED_CHAPTERS) {
+    const overflow = nextOrder.length - MAX_TRACKED_CHAPTERS;
+    const dropped = nextOrder.slice(0, overflow);
+    nextOrder = nextOrder.slice(overflow);
+    if (nextChapters === chapters) nextChapters = { ...chapters };
+    dropped.forEach((did) => delete nextChapters[did]);
+  }
+
+  return { chapters: nextChapters, chapterOrder: nextOrder };
 }
 
 function applyProgress(job, data) {
@@ -90,7 +136,7 @@ function applyProgress(job, data) {
 
     case "chapter_start": {
       const chId = data.chapter_id ?? data.chapter;
-      const { chapters, chapterOrder } = ensureChapter(
+      const { chapters, chapterOrder } = touchChapter(
         job.chapters,
         job.chapterOrder,
         chId,
@@ -101,12 +147,13 @@ function applyProgress(job, data) {
 
     case "progress": {
       const chId = data.chapter_id ?? data.chapter;
-      const { chapters, chapterOrder } = ensureChapter(
+      const { chapters, chapterOrder } = touchChapter(
         job.chapters,
         job.chapterOrder,
         chId,
         null,
       );
+      if (!chapters[chId]) return { ...job, chapterOrder }; // dropped by the cap, nothing to update
       return {
         ...job,
         chapterOrder,
@@ -124,29 +171,25 @@ function applyProgress(job, data) {
 
     case "chapter_done": {
       const chId = data.chapter_id ?? data.chapter;
-      const { chapters, chapterOrder } = ensureChapter(
-        job.chapters,
-        job.chapterOrder,
-        chId,
-        null,
-      );
+      const chapters = job.chapters[chId]
+        ? {
+            ...job.chapters,
+            [chId]: {
+              ...job.chapters[chId],
+              done: data.pages_saved,
+              total: data.pages_saved,
+              statusText: "✓",
+            },
+          }
+        : job.chapters;
       return {
         ...job,
-        chapterOrder,
-        chapters: {
-          ...chapters,
-          [chId]: {
-            ...chapters[chId],
-            done: data.pages_saved,
-            total: data.pages_saved,
-            statusText: "✓",
-          },
-        },
+        chapters,
         chaptersCompleted: (job.chaptersCompleted || 0) + 1,
-        log: [
-          ...job.log,
-          { msg: `✓ Ch.${chId} (${data.pages_saved} pages)`, type: "info" },
-        ],
+        log: appendLog(job.log, {
+          msg: `✓ Ch.${chId} (${data.pages_saved} pages)`,
+          type: "info",
+        }),
       };
     }
 
@@ -155,7 +198,7 @@ function applyProgress(job, data) {
       return {
         ...job,
         chaptersCompleted: (job.chaptersCompleted || 0) + 1,
-        log: [...job.log, { msg: `– Ch.${chId} skipped`, type: "info" }],
+        log: appendLog(job.log, { msg: `– Ch.${chId} skipped`, type: "info" }),
       };
     }
 
@@ -180,10 +223,10 @@ function applyProgress(job, data) {
         title: data.series || job.title,
         status: "done",
         active: false,
-        log: [
-          ...job.log,
-          { msg: `✓ Saved to ${data.directory}`, type: "info" },
-        ],
+        log: appendLog(job.log, {
+          msg: `✓ Saved to ${data.directory}`,
+          type: "info",
+        }),
       };
 
     case "error": {
@@ -196,14 +239,14 @@ function applyProgress(job, data) {
             ...job.chapters,
             [chId]: { ...job.chapters[chId], statusText: "✗" },
           },
-          log: [...job.log, { msg: `✗ ${data.message}`, type: "error" }],
+          log: appendLog(job.log, { msg: `✗ ${data.message}`, type: "error" }),
         };
       }
       return {
         ...job,
         status: "error",
         active: false,
-        log: [...job.log, { msg: `✗ ${data.message}`, type: "error" }],
+        log: appendLog(job.log, { msg: `✗ ${data.message}`, type: "error" }),
       };
     }
 
@@ -213,14 +256,17 @@ function applyProgress(job, data) {
         ...job,
         status: "error",
         active: false,
-        log: [
-          ...job.log,
-          { msg: `Process exited (code ${data.code})`, type: "error" },
-        ],
+        log: appendLog(job.log, {
+          msg: `Process exited (code ${data.code})`,
+          type: "error",
+        }),
       };
 
     case "log":
-      return { ...job, log: [...job.log, { msg: data.message, type: "info" }] };
+      return {
+        ...job,
+        log: appendLog(job.log, { msg: data.message, type: "info" }),
+      };
 
     default:
       return job;
@@ -280,15 +326,26 @@ function reducer(state, action) {
       };
     }
 
-    case "PROGRESS": {
-      const job = state.jobs[action.downloadId];
-      if (!job) return state;
-      const updated = applyProgress(job, action.data);
-      if (updated === job) return state;
-      return {
-        ...state,
-        jobs: { ...state.jobs, [action.downloadId]: updated },
-      };
+    // Applies a batch of buffered progress events in one state update —
+    // see the file header comment for why this replaced per-event
+    // dispatch. Events are still applied in arrival order within the
+    // batch, so cumulative fields (chaptersCompleted, log) stay correct.
+    case "BATCH": {
+      let jobs = state.jobs;
+      let changed = false;
+      for (const { downloadId, data } of action.items) {
+        const job = jobs[downloadId];
+        if (!job) continue;
+        const updated = applyProgress(job, data);
+        if (updated !== job) {
+          if (!changed) {
+            jobs = { ...jobs };
+            changed = true;
+          }
+          jobs[downloadId] = updated;
+        }
+      }
+      return changed ? { ...state, jobs } : state;
     }
 
     case "ENQUEUE":
@@ -347,16 +404,33 @@ export function DownloadTrayProvider({ children }) {
   const { config } = useConfig();
   const { showToast } = useToast();
 
-  // One subscription handles progress for every job by downloadId,
-  // matching the old single window.strip.download.onProgress()
-  // registration rather than one listener per job.
+  // Buffer raw IPC events and flush them as ONE dispatch per animation
+  // frame — see the file header comment for why this exists.
+  const pendingRef = useRef([]);
+  const rafRef = useRef(null);
+
   useEffect(() => {
+    function flush() {
+      rafRef.current = null;
+      if (pendingRef.current.length === 0) return;
+      const items = pendingRef.current;
+      pendingRef.current = [];
+      dispatch({ type: "BATCH", items });
+    }
+
     function onProgress(data) {
       if (!data?.downloadId) return;
-      dispatch({ type: "PROGRESS", downloadId: data.downloadId, data });
+      pendingRef.current.push({ downloadId: data.downloadId, data });
+      if (rafRef.current == null) {
+        rafRef.current = requestAnimationFrame(flush);
+      }
     }
+
     window.strip.download.onProgress(onProgress);
-    return () => window.strip.download.offProgress(onProgress);
+    return () => {
+      window.strip.download.offProgress(onProgress);
+      if (rafRef.current != null) cancelAnimationFrame(rafRef.current);
+    };
   }, []);
 
   const doStartJob = useCallback(
@@ -403,10 +477,6 @@ export function DownloadTrayProvider({ children }) {
     [state.jobs, config, doStartJob, showToast],
   );
 
-  // Auto-promotes the oldest queued entry whenever a slot frees up —
-  // covers both "a job just finished" and "maxConcurrentJobs changed in
-  // Settings" without scattering explicit start-next-queued calls through
-  // every status-changing action, the way the old imperative code did.
   useEffect(() => {
     const activeCount = Object.values(state.jobs).filter(
       (j) => j.active,
