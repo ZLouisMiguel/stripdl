@@ -3,20 +3,12 @@
 // Full port of the old vanilla-JS reader: per-page IntersectionObserver
 // lazy loading, scroll-position tracking with debounced progress saves,
 // next-chapter preload, resume-to-saved-page on open, and keyboard
-// shortcuts — active only while this view is mounted (React handles the
-// "only listen while in the reader" concern via effect cleanup, instead
-// of the old global listener's `state.currentView === "reader"` check).
-//
-// Resume behavior matches the original exactly: the `scrollToPage` prop
-// is only a hint from the caller (e.g. "Continue Reading" passes the
-// series' last-read page). If it's 0/unset, the chapter's own saved
-// per-chapter progress (keyed `${seriesTitle}/${chapterNumber}`) is used
-// instead — so a plain chapter-row click still resumes exactly where you
-// left off in that specific chapter.
+// shortcuts.
 
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { useConfig } from "../hooks/useConfig.js";
 import { updateLastReadPosition } from "../lib/readingProgress.js";
+import { toFileUrl } from "../lib/fileUrl.js";
 
 function PageImage({ src, index, eager, loaded, wrapperRef }) {
   const [imgLoaded, setImgLoaded] = useState(false);
@@ -76,7 +68,6 @@ export default function ReaderView({
   const progressKey =
     series && chapter ? `${series.title}/${chapter.number}` : null;
 
-  // Load pages whenever the chapter changes.
   useEffect(() => {
     let cancelled = false;
     if (!chapter) return;
@@ -99,7 +90,7 @@ export default function ReaderView({
       }
       if (cancelled) return;
 
-      const urls = filePaths.map((p) => "file:///" + p.replace(/\\/g, "/"));
+      const urls = filePaths.map((p) => toFileUrl(p));
       setPages(urls);
 
       let sp = scrollToPage;
@@ -133,19 +124,12 @@ export default function ReaderView({
       .then((filePaths) => {
         filePaths.slice(0, 3).forEach((p) => {
           const img = new Image();
-          img.src = "file:///" + p.replace(/\\/g, "/");
+          img.src = toFileUrl(p);
         });
       })
       .catch(() => {});
   }
 
-  // Single IntersectionObserver handles lazy-loading the real <img> src,
-  // tracking the furthest-scrolled page, and triggering next-chapter
-  // preload once the last 5 pages come into view — same combined
-  // responsibilities as the old code's one shared observer. Uses the
-  // default (viewport) root, not the scroll container, matching the
-  // original — the container's own scrolling still moves pages through
-  // the viewport, which is all IntersectionObserver needs to see.
   useEffect(() => {
     if (!pages.length) return;
     if (observerRef.current) observerRef.current.disconnect();
@@ -187,7 +171,6 @@ export default function ReaderView({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pages, useLazy, preloadNext]);
 
-  // Scroll to the resume page once pages + startPage are both known.
   useEffect(() => {
     if (!pages.length || startPage <= 0 || startPage >= pages.length) return;
     const t = setTimeout(() => {
@@ -196,9 +179,6 @@ export default function ReaderView({
     return () => clearTimeout(t);
   }, [pages, startPage]);
 
-  // Scroll tracking: current page indicator, debounced progress save,
-  // end-of-chapter overlay visibility — ported directly from the old
-  // _setupScrollTracking(), same viewport-relative page-position math.
   const handleScroll = useCallback(() => {
     const container = containerRef.current;
     if (!container) return;
@@ -234,7 +214,6 @@ export default function ReaderView({
     return () => container.removeEventListener("scroll", handleScroll);
   }, [handleScroll]);
 
-  // Keyboard shortcuts — only active while this view is mounted.
   useEffect(() => {
     function onKeydown(e) {
       const tag = e.target.tagName;
