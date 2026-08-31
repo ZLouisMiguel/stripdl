@@ -1,22 +1,19 @@
 // desktop/renderer/src/components/SeriesCard.jsx
 //
-// Port of app.js's buildSeriesCard(). The "Continue" badge now calls the
-// new onContinue prop (jumps straight into the Reader at the last-read
-// chapter/page) rather than falling through to onOpen (series detail) —
-// matching the old vanilla-JS behavior, which the placeholder-Reader
-// version of this component couldn't yet replicate.
+// Port of app.js's buildSeriesCard(). The "Continue" badge calls the
+// onContinue prop (jumps straight into the Reader at the last-read
+// chapter/page) rather than falling through to onOpen (series detail).
 
 import React from "react";
 import { useToast } from "../context/ToastContext.jsx";
 import { useConfirm } from "../context/ConfirmContext.jsx";
+import { toFileUrl } from "../lib/fileUrl.js";
 
 export default function SeriesCard({ series, onOpen, onContinue, onDeleted }) {
   const { showToast } = useToast();
   const confirm = useConfirm();
 
-  const coverSrc = series.coverPath
-    ? `file:///${series.coverPath.replace(/\\/g, "/")}`
-    : null;
+  const coverSrc = toFileUrl(series.coverPath);
 
   async function handleContextMenu(e) {
     e.preventDefault();
