@@ -1,14 +1,16 @@
 // desktop/renderer/src/components/SeriesCard.jsx
 //
-// Ported from app.js's buildSeriesCard(). `series` is expected to already
-// be enriched (lastRead, progress) by useLibrary.js — this component does
-// no progress-related IPC calls itself, only the delete flow.
+// Port of app.js's buildSeriesCard(). The "Continue" badge now calls the
+// new onContinue prop (jumps straight into the Reader at the last-read
+// chapter/page) rather than falling through to onOpen (series detail) —
+// matching the old vanilla-JS behavior, which the placeholder-Reader
+// version of this component couldn't yet replicate.
 
 import React from "react";
 import { useToast } from "../context/ToastContext.jsx";
 import { useConfirm } from "../context/ConfirmContext.jsx";
 
-export default function SeriesCard({ series, onOpen, onDeleted }) {
+export default function SeriesCard({ series, onOpen, onContinue, onDeleted }) {
   const { showToast } = useToast();
   const confirm = useConfirm();
 
@@ -64,11 +66,8 @@ export default function SeriesCard({ series, onOpen, onDeleted }) {
             className="series-card-continue-badge"
             onClick={(e) => {
               e.stopPropagation();
-              // The Reader view isn't ported yet, so "Continue" opens the
-              // series detail page for now, same destination as clicking
-              // the card itself — this will jump straight into the last
-              // chapter/page once ReaderView is real.
-              onOpen(series);
+              if (onContinue) onContinue(series);
+              else onOpen(series);
             }}
           >
             Continue
