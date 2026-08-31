@@ -1,9 +1,8 @@
 // desktop/renderer/src/views/SeriesDetailView.jsx
 //
 // Full port of the old openSeries()/buildChapterRows() pair. Read,
-// Continue Reading, and chapter-row clicks now open the real Reader via
-// onOpenChapter/onContinue props (previously placeholder toasts) — the
-// Reader view is real as of this round.
+// Continue Reading, and chapter-row clicks open the real Reader via
+// onOpenChapter/onContinue props.
 
 import React, { useEffect, useState } from "react";
 import { useToast } from "../context/ToastContext.jsx";
@@ -11,6 +10,7 @@ import { useConfirm } from "../context/ConfirmContext.jsx";
 import { useDownloadTray } from "../context/DownloadTrayContext.jsx";
 import { updateLastReadPosition } from "../lib/readingProgress.js";
 import { invalidateLibraryCache } from "../lib/libraryCache.js";
+import { toFileUrl } from "../lib/fileUrl.js";
 import ScheduleCard from "../components/ScheduleCard.jsx";
 
 export default function SeriesDetailView({
@@ -68,9 +68,7 @@ export default function SeriesDetailView({
   const lastReadCh = lastRead
     ? series.chapters?.find((ch) => ch.number == lastRead.chapterNumber)
     : null;
-  const coverSrc = series.coverPath
-    ? `file:///${series.coverPath.replace(/\\/g, "/")}`
-    : null;
+  const coverSrc = toFileUrl(series.coverPath);
   const tags = [series.genre, series.status].filter(Boolean);
 
   async function handleChapterContextMenu(e, chapter) {
