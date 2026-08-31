@@ -11,7 +11,7 @@ import { useToast } from "../context/ToastContext.jsx";
 import { useDownloadTray } from "../context/DownloadTrayContext.jsx";
 import SeriesCard from "../components/SeriesCard.jsx";
 
-export default function LibraryView({ onOpenSeries }) {
+export default function LibraryView({ onOpenSeries, onContinue }) {
   const { library, loading, error, refresh, removeSeries } = useLibrary();
   const { showToast } = useToast();
   const { openTray } = useDownloadTray();
@@ -140,6 +140,7 @@ export default function LibraryView({ onOpenSeries }) {
               key={series.directory}
               series={series}
               onOpen={onOpenSeries}
+              onContinue={onContinue}
               onDeleted={removeSeries}
             />
           ))}
