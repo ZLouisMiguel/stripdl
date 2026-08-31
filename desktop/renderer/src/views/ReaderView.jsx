@@ -1,16 +1,443 @@
 // desktop/renderer/src/views/ReaderView.jsx
 //
-// Placeholder — full port (lazy-loading IntersectionObserver, scroll
-// tracking, chapter preload) is a later migration pass.
+// Full port of the old vanilla-JS reader: per-page IntersectionObserver
+// lazy loading, scroll-position tracking with debounced progress saves,
+// next-chapter preload, resume-to-saved-page on open, and keyboard
+// shortcuts — active only while this view is mounted (React handles the
+// "only listen while in the reader" concern via effect cleanup, instead
+// of the old global listener's `state.currentView === "reader"` check).
+//
+// Resume behavior matches the original exactly: the `scrollToPage` prop
+// is only a hint from the caller (e.g. "Continue Reading" passes the
+// series' last-read page). If it's 0/unset, the chapter's own saved
+// per-chapter progress (keyed `${seriesTitle}/${chapterNumber}`) is used
+// instead — so a plain chapter-row click still resumes exactly where you
+// left off in that specific chapter.
 
-import React from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
+import { useConfig } from "../hooks/useConfig.js";
+import { updateLastReadPosition } from "../lib/readingProgress.js";
 
-export default function ReaderView() {
+function PageImage({ src, index, eager, loaded, wrapperRef }) {
+  const [imgLoaded, setImgLoaded] = useState(false);
+  const [imgError, setImgError] = useState(false);
+  const shouldRender = eager || loaded;
+
   return (
-    <section id="view-reader" className="view reader-view">
-      <div className="empty-state">
-        <div className="empty-icon">◈</div>
-        <p>Reader view is being ported to React next.</p>
+    <div
+      ref={wrapperRef}
+      data-page-index={index}
+      style={{ width: "100%", position: "relative", minHeight: 200 }}
+    >
+      {!imgLoaded && !imgError && <div className="reader-page-loading" />}
+      {shouldRender && (
+        <img
+          className="reader-page-img"
+          style={{ display: imgLoaded ? "block" : "none" }}
+          alt={`Page ${index + 1}`}
+          src={src}
+          onLoad={() => setImgLoaded(true)}
+          onError={() => setImgError(true)}
+        />
+      )}
+      {imgError && (
+        <div className="reader-page-error">
+          Page {index + 1} could not be loaded.
+        </div>
+      )}
+    </div>
+  );
+}
+
+export default function ReaderView({
+  series,
+  chapter,
+  scrollToPage = 0,
+  onBack,
+  onExitToLibrary,
+  onNavigateChapter,
+}) {
+  const { config } = useConfig();
+  const [pages, setPages] = useState([]);
+  const [error, setError] = useState(null);
+  const [visibleIndex, setVisibleIndex] = useState(0);
+  const [showEndOverlay, setShowEndOverlay] = useState(false);
+  const [loadedSet, setLoadedSet] = useState(() => new Set());
+  const [startPage, setStartPage] = useState(0);
+
+  const containerRef = useRef(null);
+  const pageRefs = useRef([]);
+  const observerRef = useRef(null);
+  const preloadTriggeredRef = useRef(false);
+  const saveTimerRef = useRef(null);
+
+  const useLazy = config?.lazyLoading !== false;
+  const preloadNext = config?.preloadNextChapter !== false;
+  const progressKey =
+    series && chapter ? `${series.title}/${chapter.number}` : null;
+
+  // Load pages whenever the chapter changes.
+  useEffect(() => {
+    let cancelled = false;
+    if (!chapter) return;
+
+    setPages([]);
+    setError(null);
+    setVisibleIndex(0);
+    setShowEndOverlay(false);
+    setLoadedSet(new Set());
+    preloadTriggeredRef.current = false;
+    pageRefs.current = [];
+
+    (async () => {
+      let filePaths = [];
+      try {
+        filePaths = await window.strip.chapter.pages(chapter.directory);
+      } catch (e) {
+        if (!cancelled) setError(e.message || String(e));
+        return;
+      }
+      if (cancelled) return;
+
+      const urls = filePaths.map((p) => "file:///" + p.replace(/\\/g, "/"));
+      setPages(urls);
+
+      let sp = scrollToPage;
+      if (!sp) {
+        try {
+          sp = (await window.strip.progress.get(progressKey)) || 0;
+        } catch (_) {
+          sp = 0;
+        }
+      }
+      if (!cancelled) setStartPage(sp);
+
+      if (!useLazy) {
+        setLoadedSet(new Set(urls.map((_, i) => i)));
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [chapter?.directory]);
+
+  function preloadNextChapter() {
+    if (!series || !chapter) return;
+    const idx = series.chapters.findIndex((c) => c.number === chapter.number);
+    if (idx === -1 || idx >= series.chapters.length - 1) return;
+    const nextCh = series.chapters[idx + 1];
+    window.strip.chapter
+      .pages(nextCh.directory)
+      .then((filePaths) => {
+        filePaths.slice(0, 3).forEach((p) => {
+          const img = new Image();
+          img.src = "file:///" + p.replace(/\\/g, "/");
+        });
+      })
+      .catch(() => {});
+  }
+
+  // Single IntersectionObserver handles lazy-loading the real <img> src,
+  // tracking the furthest-scrolled page, and triggering next-chapter
+  // preload once the last 5 pages come into view — same combined
+  // responsibilities as the old code's one shared observer. Uses the
+  // default (viewport) root, not the scroll container, matching the
+  // original — the container's own scrolling still moves pages through
+  // the viewport, which is all IntersectionObserver needs to see.
+  useEffect(() => {
+    if (!pages.length) return;
+    if (observerRef.current) observerRef.current.disconnect();
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        entries.forEach((entry) => {
+          if (!entry.isIntersecting) return;
+          const idx = Number(entry.target.dataset.pageIndex);
+
+          if (useLazy) {
+            setLoadedSet((prev) => {
+              if (prev.has(idx)) return prev;
+              const next = new Set(prev);
+              next.add(idx);
+              return next;
+            });
+          }
+
+          setVisibleIndex((prev) => (idx > prev ? idx : prev));
+
+          if (
+            preloadNext &&
+            !preloadTriggeredRef.current &&
+            idx >= pages.length - 5
+          ) {
+            preloadTriggeredRef.current = true;
+            preloadNextChapter();
+          }
+        });
+      },
+      { rootMargin: "500px 0px", threshold: 0 },
+    );
+
+    pageRefs.current.forEach((el) => el && observer.observe(el));
+    observerRef.current = observer;
+
+    return () => observer.disconnect();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pages, useLazy, preloadNext]);
+
+  // Scroll to the resume page once pages + startPage are both known.
+  useEffect(() => {
+    if (!pages.length || startPage <= 0 || startPage >= pages.length) return;
+    const t = setTimeout(() => {
+      pageRefs.current[startPage]?.scrollIntoView({ behavior: "smooth" });
+    }, 200);
+    return () => clearTimeout(t);
+  }, [pages, startPage]);
+
+  // Scroll tracking: current page indicator, debounced progress save,
+  // end-of-chapter overlay visibility — ported directly from the old
+  // _setupScrollTracking(), same viewport-relative page-position math.
+  const handleScroll = useCallback(() => {
+    const container = containerRef.current;
+    if (!container) return;
+
+    let idx = 0;
+    pageRefs.current.forEach((el, i) => {
+      if (!el) return;
+      const rect = el.getBoundingClientRect();
+      if (rect.top < window.innerHeight / 2 && rect.bottom > 0) idx = i;
+    });
+    setVisibleIndex(idx);
+
+    clearTimeout(saveTimerRef.current);
+    saveTimerRef.current = setTimeout(() => {
+      if (!progressKey) return;
+      window.strip.progress.set(progressKey, idx);
+      updateLastReadPosition(series.title, chapter.number, idx, pages.length);
+    }, 500);
+
+    const distFromBottom =
+      container.scrollHeight - container.scrollTop - container.clientHeight;
+    setShowEndOverlay((prev) => {
+      if (!prev && distFromBottom < 120) return true;
+      if (prev && distFromBottom > 180) return false;
+      return prev;
+    });
+  }, [progressKey, series, chapter, pages.length]);
+
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container) return;
+    container.addEventListener("scroll", handleScroll, { passive: true });
+    return () => container.removeEventListener("scroll", handleScroll);
+  }, [handleScroll]);
+
+  // Keyboard shortcuts — only active while this view is mounted.
+  useEffect(() => {
+    function onKeydown(e) {
+      const tag = e.target.tagName;
+      if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
+      const key = e.key.toLowerCase();
+
+      if (key === "escape" || key === "g") {
+        e.preventDefault();
+        onBack();
+        return;
+      }
+      if (key === "b") {
+        e.preventDefault();
+        onExitToLibrary();
+        return;
+      }
+      if (key === "n" || key === "j") {
+        e.preventDefault();
+        onNavigateChapter(1);
+        return;
+      }
+      if (key === "p" || key === "k") {
+        e.preventDefault();
+        onNavigateChapter(-1);
+        return;
+      }
+
+      const container = containerRef.current;
+      if (!container) return;
+      if (key === "arrowdown" || key === "arrowright") {
+        e.preventDefault();
+        container.scrollBy({
+          top: window.innerHeight * 0.85,
+          behavior: "smooth",
+        });
+      } else if (key === "arrowup" || key === "arrowleft") {
+        e.preventDefault();
+        container.scrollBy({
+          top: -window.innerHeight * 0.85,
+          behavior: "smooth",
+        });
+      }
+    }
+
+    document.addEventListener("keydown", onKeydown);
+    return () => document.removeEventListener("keydown", onKeydown);
+  }, [onBack, onExitToLibrary, onNavigateChapter]);
+
+  if (!series || !chapter) {
+    return (
+      <section id="view-reader" className="view reader-view active">
+        <p className="muted" style={{ padding: 32 }}>
+          No chapter selected.
+        </p>
+      </section>
+    );
+  }
+
+  const idx = series.chapters.findIndex((c) => c.number === chapter.number);
+  const hasPrev = idx > 0;
+  const hasNext = idx !== -1 && idx < series.chapters.length - 1;
+
+  return (
+    <section id="view-reader" className="view reader-view active">
+      <div id="reader-toolbar">
+        <button className="btn btn-ghost" onClick={onBack}>
+          <svg
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+          >
+            <polyline points="15 18 9 12 15 6" />
+          </svg>
+          Back
+        </button>
+        <div className="reader-chapter-nav">
+          <button
+            className="btn btn-ghost icon-btn"
+            title="Previous chapter (P)"
+            disabled={!hasPrev}
+            onClick={() => onNavigateChapter(-1)}
+          >
+            <svg
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+            >
+              <polyline points="15 18 9 12 15 6" />
+            </svg>
+          </button>
+          <span className="reader-title-text">
+            {series.title} · Chapter {chapter.number}
+          </span>
+          <button
+            className="btn btn-ghost icon-btn"
+            title="Next chapter (N)"
+            disabled={!hasNext}
+            onClick={() => onNavigateChapter(1)}
+          >
+            <svg
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+            >
+              <polyline points="9 18 15 12 9 6" />
+            </svg>
+          </button>
+        </div>
+        <div className="reader-controls">
+          <span>
+            {pages.length > 0 ? `${visibleIndex + 1} / ${pages.length}` : ""}
+          </span>
+        </div>
+      </div>
+
+      <div id="reader-container" ref={containerRef}>
+        <div id="reader-pages">
+          {error && (
+            <div className="reader-page-error">
+              Could not load pages: {error}
+            </div>
+          )}
+          {!error && pages.length === 0 && (
+            <div className="reader-page-error">
+              No pages found in this chapter.
+            </div>
+          )}
+          {pages.map((src, i) => (
+            <PageImage
+              key={i}
+              src={src}
+              index={i}
+              eager={!useLazy}
+              loaded={loadedSet.has(i)}
+              wrapperRef={(el) => (pageRefs.current[i] = el)}
+            />
+          ))}
+        </div>
+      </div>
+
+      <div
+        id="chapter-end-overlay"
+        className={showEndOverlay ? "is-visible" : ""}
+        aria-hidden={!showEndOverlay}
+      >
+        <div className="chapter-end-card">
+          <div className="chapter-end-label">End of chapter</div>
+          <div className="chapter-end-title">
+            {series.title} · Chapter {chapter.number}
+          </div>
+          <div className="chapter-end-actions">
+            <button
+              className="btn btn-ghost"
+              disabled={!hasPrev}
+              onClick={() => onNavigateChapter(-1)}
+            >
+              <svg
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                style={{ width: 15, height: 15 }}
+              >
+                <polyline points="15 18 9 12 15 6" />
+              </svg>
+              Previous
+            </button>
+            <button className="btn btn-ghost" onClick={onBack}>
+              <svg
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                style={{ width: 15, height: 15 }}
+              >
+                <rect x="3" y="3" width="7" height="9" rx="1" />
+                <rect x="14" y="3" width="7" height="5" rx="1" />
+                <rect x="14" y="12" width="7" height="9" rx="1" />
+                <rect x="3" y="16" width="7" height="5" rx="1" />
+              </svg>
+              Chapter list
+            </button>
+            <button
+              className="btn btn-primary"
+              disabled={!hasNext}
+              onClick={() => onNavigateChapter(1)}
+            >
+              Next chapter
+              <svg
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                style={{ width: 15, height: 15 }}
+              >
+                <polyline points="9 18 15 12 9 6" />
+              </svg>
+            </button>
+          </div>
+        </div>
       </div>
     </section>
   );
