@@ -1,10 +1,9 @@
 // desktop/renderer/src/views/SeriesDetailView.jsx
 //
-// Full port of the old openSeries()/buildChapterRows() pair. "Read,"
-// "Continue Reading," and clicking a chapter row all currently show a
-// "Reader isn't wired up yet" toast — the Reader view is the next
-// migration pass, same placeholder-toast pattern used for the Download
-// tray last round.
+// Full port of the old openSeries()/buildChapterRows() pair. Read,
+// Continue Reading, and chapter-row clicks now open the real Reader via
+// onOpenChapter/onContinue props (previously placeholder toasts) — the
+// Reader view is real as of this round.
 
 import React, { useEffect, useState } from "react";
 import { useToast } from "../context/ToastContext.jsx";
@@ -14,7 +13,12 @@ import { updateLastReadPosition } from "../lib/readingProgress.js";
 import { invalidateLibraryCache } from "../lib/libraryCache.js";
 import ScheduleCard from "../components/ScheduleCard.jsx";
 
-export default function SeriesDetailView({ series: initialSeries, onBack }) {
+export default function SeriesDetailView({
+  series: initialSeries,
+  onBack,
+  onOpenChapter,
+  onContinue,
+}) {
   const { showToast } = useToast();
   const confirm = useConfirm();
   const { openTray } = useDownloadTray();
@@ -58,10 +62,6 @@ export default function SeriesDetailView({ series: initialSeries, onBack }) {
         <p className="muted">No series selected.</p>
       </section>
     );
-  }
-
-  function notifyReaderNotReady() {
-    showToast("Reader isn't wired up yet — coming in a future pass.", "info");
   }
 
   const lastRead = series.lastRead;
@@ -156,7 +156,11 @@ export default function SeriesDetailView({ series: initialSeries, onBack }) {
           )}
           <div className="detail-desc">{series.description || ""}</div>
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-            <button className="btn btn-primary" onClick={notifyReaderNotReady}>
+            <button
+              className="btn btn-primary"
+              disabled={!series.chapters?.length}
+              onClick={() => onOpenChapter(series.chapters[0], 0)}
+            >
               <svg
                 viewBox="0 0 24 24"
                 fill="none"
@@ -169,10 +173,7 @@ export default function SeriesDetailView({ series: initialSeries, onBack }) {
               {lastRead ? "Start Over" : "Read"}
             </button>
             {lastRead && (
-              <button
-                className="btn btn-secondary"
-                onClick={notifyReaderNotReady}
-              >
+              <button className="btn btn-secondary" onClick={onContinue}>
                 <svg
                   viewBox="0 0 24 24"
                   fill="none"
@@ -239,7 +240,7 @@ export default function SeriesDetailView({ series: initialSeries, onBack }) {
               className={`chapter-row ${hasProgress ? "has-progress" : ""} ${
                 isLastRead ? "last-read" : ""
               }`}
-              onClick={notifyReaderNotReady}
+              onClick={() => onOpenChapter(ch, 0)}
               onContextMenu={(e) => handleChapterContextMenu(e, ch)}
             >
               <span className="chapter-num">{ch.number}</span>
