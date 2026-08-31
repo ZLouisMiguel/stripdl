@@ -4,16 +4,21 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <!--
-      script-src includes 'unsafe-eval' and connect-src allows localhost
-      websockets specifically for Vite's dev server (React Fast Refresh
-      uses eval; HMR uses a websocket). This is looser than the previous
-      CSP, which didn't need to accommodate a dev server. Worth tightening
-      back down to a stricter production-only CSP later if desired — not
-      done here to keep this pass focused on the migration itself.
+      img-src now allows strip-file: (the custom protocol serving local
+      covers/chapter pages — see main/index.js) instead of the plain
+      file: it used to list. Plain file: never actually worked here: a
+      page loaded over http:// (Vite's dev server) is blocked by
+      Chromium from loading file:// resources regardless of what CSP
+      permits — that restriction sits below CSP, at the origin level.
+      strip-file: isn't subject to that rule, which is the whole point
+      of registering it.
+
+      script-src's 'unsafe-eval' and connect-src's localhost entries are
+      still for Vite's dev server (React Fast Refresh + HMR websocket).
     -->
     <meta
       http-equiv="Content-Security-Policy"
-      content="default-src 'self'; img-src 'self' file: data:; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; script-src 'self' 'unsafe-eval'; connect-src 'self' ws://localhost:* http://localhost:*"
+      content="default-src 'self'; img-src 'self' strip-file: data:; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; script-src 'self' 'unsafe-eval'; connect-src 'self' ws://localhost:* http://localhost:*"
     />
     <title>Strip</title>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
