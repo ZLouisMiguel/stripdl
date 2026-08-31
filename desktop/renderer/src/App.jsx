@@ -1,9 +1,10 @@
 // desktop/renderer/src/App.jsx
 //
-// View router, wrapped in the three context providers every descendant
-// needs: Toast, Confirm, and (new this round) DownloadTray. The tray
-// itself renders once here — its visibility is entirely CSS-driven, so
-// it's always mounted regardless of which view is active.
+// View router, wrapped in the context providers every descendant needs.
+// New this round: currentChapter/readerScrollToPage state and the three
+// navigation helpers the Reader needs (openChapter, continueReading,
+// navigateChapter) — these replace the "Reader isn't wired up yet"
+// placeholder that every entry point into reading previously showed.
 
 import React, { useEffect, useState } from "react";
 import Sidebar from "./components/Sidebar.jsx";
@@ -20,6 +21,8 @@ import { applyTheme } from "./lib/theme.js";
 function AppShell() {
   const [view, setView] = useState("library");
   const [currentSeries, setCurrentSeries] = useState(null);
+  const [currentChapter, setCurrentChapter] = useState(null);
+  const [readerScrollToPage, setReaderScrollToPage] = useState(0);
 
   useEffect(() => {
     let cancelled = false;
@@ -36,18 +39,65 @@ function AppShell() {
     setView("series");
   }
 
+  function openChapter(series, chapter, scrollToPage = 0) {
+    setCurrentSeries(series);
+    setCurrentChapter(chapter);
+    setReaderScrollToPage(scrollToPage);
+    setView("reader");
+  }
+
+  function continueReading(series) {
+    if (!series?.chapters?.length) return;
+    const lastRead = series.lastRead;
+    const ch = lastRead
+      ? series.chapters.find((c) => c.number == lastRead.chapterNumber)
+      : null;
+    const target = ch || series.chapters[0];
+    openChapter(series, target, lastRead ? lastRead.pageIndex : 0);
+  }
+
+  function navigateChapter(direction) {
+    if (!currentSeries || !currentChapter) return;
+    const idx = currentSeries.chapters.findIndex(
+      (c) => c.number === currentChapter.number,
+    );
+    if (idx === -1) return;
+    const target = idx + direction;
+    if (target < 0 || target >= currentSeries.chapters.length) return;
+    openChapter(currentSeries, currentSeries.chapters[target], 0);
+  }
+
+  function backFromReader() {
+    setView(currentSeries ? "series" : "library");
+  }
+
   return (
     <>
       <Sidebar currentView={view} onNavigate={setView} />
       <main id="main">
-        {view === "library" && <LibraryView onOpenSeries={openSeries} />}
+        {view === "library" && (
+          <LibraryView onOpenSeries={openSeries} onContinue={continueReading} />
+        )}
         {view === "series" && (
           <SeriesDetailView
             series={currentSeries}
             onBack={() => setView("library")}
+            onOpenChapter={(chapter, scrollToPage) =>
+              openChapter(currentSeries, chapter, scrollToPage)
+            }
+            onContinue={() => continueReading(currentSeries)}
           />
         )}
-        {view === "reader" && <ReaderView />}
+        {view === "reader" && (
+          <ReaderView
+            series={currentSeries}
+            chapter={currentChapter}
+            scrollToPage={readerScrollToPage}
+            onBack={backFromReader}
+            onExitToLibrary={() => setView("library")}
+            onNavigateChapter={navigateChapter}
+          />
+        )}
         {view === "settings" && <SettingsView />}
       </main>
       <DownloadTray />
