@@ -27,26 +27,28 @@ const isDev =
 // ──────────────────────────────────────────────────────────────────
 //  Custom "strip-file://" protocol — serves local files (covers, chapter
 //  pages) to the renderer regardless of how the renderer page itself was
-//  loaded.
+//  loaded (needed because a page loaded over http://, as in `npm run
+//  dev`'s Vite dev server, is blocked from loading file:// resources
+//  outright — a Chromium origin-level restriction, independent of CSP).
 //
-//  WHY THIS EXISTS: a page loaded over http:// (as the renderer is during
-//  `npm run dev`, served by Vite's dev server at http://localhost:5173)
-//  is blocked by Chromium from loading file:// resources at all — this
-//  is a hardcoded browser security restriction tied to the *page's own
-//  origin*, completely separate from Content-Security-Policy. It would
-//  not affect a packaged production build (which loads the renderer via
-//  loadFile(), i.e. a file:// origin, so file:// images match), but
-//  leaving dev mode broken and only-correct-in-production is a bad place
-//  to develop from. Registering our own scheme sidesteps the restriction
-//  entirely, in both dev and production alike, since it isn't subject to
-//  the file://-from-http:// rule.
+//  URL SHAPE: "strip-file://local-file/<percent-encoded full real path>".
+//  A prior version used a three-slash, empty-host format mimicking
+//  file:// URLs — but that empty-host convention is special-cased by
+//  Chromium ONLY for the literal "file" scheme, not custom protocols.
+//  For a Windows path, that caused the drive letter to be silently
+//  swallowed into a bogus URL host on every single request (see
+//  renderer/src/lib/fileUrl.js for the full explanation — matching
+//  fileUrl.js on the renderer side builds URLs in this same shape).
+//
+//  Using a fixed non-empty host plus the ENTIRE real path as one
+//  percent-encoded opaque path segment means nothing in the URL can be
+//  misread as a host, port, or path separator — so decoding is exactly
+//  the reverse: take the one path segment, decode it, and that's the
+//  original path string, unchanged (no platform-specific drive-letter
+//  slicing needed, unlike the previous version).
 //
 //  registerSchemesAsPrivileged() MUST run before app 'ready' — hence
-//  module-level, not inside whenReady(). `standard: true` and
-//  `supportFetchAPI: true` let it behave like a normal resource-loading
-//  scheme (relative paths, fetch(), <img src>, etc.); `secure: true`
-//  marks it as a secure context so an insecure (http) dev-mode page can
-//  still load from it without a mixed-content block.
+//  module-level, not inside whenReady().
 // ──────────────────────────────────────────────────────────────────
 
 protocol.registerSchemesAsPrivileged([
@@ -63,22 +65,20 @@ protocol.registerSchemesAsPrivileged([
 ]);
 
 function registerStripFileProtocol() {
-  protocol.handle("strip-file", (request) => {
+  protocol.handle("strip-file", async (request) => {
     try {
       const url = new URL(request.url);
-      // We build these URLs as "strip-file:///<path>" (see
-      // renderer/src/lib/fileUrl.js), so the host portion is empty and
-      // the whole path lands in `pathname`, percent-encoded — same shape
-      // a file:// URL would have.
-      let filePath = decodeURIComponent(url.pathname);
-      // On Windows, "strip-file:///C:/Users/..." parses to a pathname of
-      // "/C:/Users/...". Strip that leading slash before the drive
-      // letter so it becomes a valid Windows path — mirrors what
-      // Chromium does internally for file:// URLs on Windows.
-      if (process.platform === "win32" && /^\/[a-zA-Z]:/.test(filePath)) {
-        filePath = filePath.slice(1);
-      }
-      return net.fetch(pathToFileURL(filePath).toString());
+      // pathname is "/" + the single encodeURIComponent'd path segment
+      // built by renderer/src/lib/fileUrl.js — decoding it recovers the
+      // exact original path string (backslashes, drive letter, spaces,
+      // unicode, all intact), no reconstruction needed.
+      const filePath = decodeURIComponent(url.pathname.slice(1));
+      // Awaited (not just returned) so a fetch failure — e.g. the file
+      // genuinely doesn't exist — is caught here and turned into a
+      // readable error response, instead of becoming an unhandled
+      // promise rejection that surfaces to the renderer as an opaque
+      // net::ERR_UNEXPECTED with no diagnostic information.
+      return await net.fetch(pathToFileURL(filePath).toString());
     } catch (e) {
       return new Response(`strip-file protocol error: ${e.message}`, {
         status: 404,
