@@ -1,4 +1,4 @@
-/* electron-app/src/css/main.css */
+/* desktop/renderer/src/styles/main.css */
 /* Design system for Strip reader. */
 /* Palette anchors: parchment #f5f1e6 · ocean-steel #6194b2 */
 /* Typefaces: DM Serif Display (headings) · DM Sans (body) */
@@ -111,10 +111,16 @@ select {
 }
 
 /* ── Layout ─────────────────────────────────────────────── */
-body {
+/*
+ * Was `body { display: grid; ... }` in the pre-React version, where
+ * #sidebar and #main were direct children of <body>. React mounts
+ * everything into #root, so #root is now the grid container instead.
+ */
+#root {
   display: grid;
   grid-template-columns: var(--sidebar-w) 1fr;
   grid-template-rows: 100vh;
+  height: 100%;
 }
 
 /* ── Sidebar ─────────────────────────────────────────────── */
@@ -748,6 +754,7 @@ body {
   background-size: 200% 100%;
   animation: shimmer 1.5s infinite;
   border-radius: var(--r-sm);
+  min-height: 400px;
 }
 
 .reader-page-error {
@@ -764,12 +771,6 @@ body {
 }
 
 /* ── End-of-chapter overlay ──────────────────────────────── */
-/*
- * Fixed-position and outside #reader-container, so toggling .is-visible
- * never changes scrollHeight and never retriggers the scroll listener.
- * Visibility is purely opacity + transform on the class — zero display
- * changes, zero layout reflow, zero flicker.
- */
 #chapter-end-overlay {
   position: fixed;
   left: var(--sidebar-w);
@@ -871,18 +872,8 @@ body {
 }
 
 /* ── Download Tray ────────────────────────────────────────── */
-/*
-   The tray is a fixed bottom drawer that slides up from the bottom edge
-   of the content column (#main). It never covers the sidebar.
-   States:
-     (default)        → hidden below viewport
-     .is-open         → visible and expanded
-     .is-open.is-collapsed → header only visible; body hidden
-*/
-
 .download-tray {
   position: fixed;
-  /* align with right edge of #main — sidebar is var(--sidebar-w) wide */
   left: var(--sidebar-w);
   right: 0;
   bottom: 0;
@@ -894,7 +885,6 @@ body {
   box-shadow: 0 -4px 24px rgba(0, 0, 0, 0.1);
   border-radius: var(--r-md) var(--r-md) 0 0;
 
-  /* Slide-up animation */
   transform: translateY(100%);
   transition: transform 0.25s cubic-bezier(0.4, 0, 0.2, 1);
   display: flex;
@@ -906,7 +896,6 @@ body {
   transform: translateY(0);
 }
 
-/* Collapsed: only show the header bar */
 .download-tray.is-open.is-collapsed .tray-body {
   display: none;
 }
@@ -982,7 +971,7 @@ body {
 }
 
 .tray-input:first-child {
-  flex: 1; /* URL field stretches */
+  flex: 1;
   min-width: 0;
 }
 
@@ -1373,10 +1362,6 @@ body {
   transition: width 0.3s ease;
 }
 
-/* ═══════════════════════════════════════════════════════════════
-   v2 additions
-   ═══════════════════════════════════════════════════════════════ */
-
 /* ── Toast notifications ─────────────────────────────────────── */
 
 .toast-container {
@@ -1506,7 +1491,6 @@ body {
   margin-top: 2px;
 }
 
-/* Toggle switch */
 .toggle {
   position: relative;
   display: inline-block;
@@ -1620,7 +1604,6 @@ body {
   text-align: center;
 }
 
-/* Queued job styling */
 .tray-job-queued {
   opacity: 0.65;
 }
@@ -1639,14 +1622,6 @@ body {
 
 .chapter-row:active {
   opacity: 0.7;
-}
-
-/* ── Lazy-loading shimmer placeholder (reader) ────────────────── */
-
-/* The existing .reader-page-loading shimmer is already defined in the
-   base CSS; this ensures it has a minimum height for lazy slots. */
-.reader-page-loading {
-  min-height: 400px;
 }
 
 /* ── Confirm Modal (non-blocking DOM overlay) ─────────────────── */

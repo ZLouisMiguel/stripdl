@@ -18,6 +18,7 @@ env/
 # Electron
 desktop/node_modules/
 desktop/dist/
+desktop/out/
 
 # Strip data (downloads)
 strip-data/

@@ -11,14 +11,81 @@ const {
   Menu,
   Notification,
   powerMonitor,
+  protocol,
+  net,
 } = require("electron");
 const path = require("path");
 const fs = require("fs");
+const { pathToFileURL } = require("url");
 const { spawn } = require("child_process");
 const { buildDownloadConfigArgs } = require("./configKeys");
 const { startScheduler } = require("./scheduler");
 
-const isDev = process.argv.includes("--dev");
+const isDev =
+  process.argv.includes("--dev") || !!process.env.ELECTRON_RENDERER_URL;
+
+// ──────────────────────────────────────────────────────────────────
+//  Custom "strip-file://" protocol — serves local files (covers, chapter
+//  pages) to the renderer regardless of how the renderer page itself was
+//  loaded (needed because a page loaded over http://, as in `npm run
+//  dev`'s Vite dev server, is blocked from loading file:// resources
+//  outright — a Chromium origin-level restriction, independent of CSP).
+//
+//  URL SHAPE: "strip-file://local-file/<percent-encoded full real path>".
+//  A prior version used a three-slash, empty-host format mimicking
+//  file:// URLs — but that empty-host convention is special-cased by
+//  Chromium ONLY for the literal "file" scheme, not custom protocols.
+//  For a Windows path, that caused the drive letter to be silently
+//  swallowed into a bogus URL host on every single request (see
+//  renderer/src/lib/fileUrl.js for the full explanation — matching
+//  fileUrl.js on the renderer side builds URLs in this same shape).
+//
+//  Using a fixed non-empty host plus the ENTIRE real path as one
+//  percent-encoded opaque path segment means nothing in the URL can be
+//  misread as a host, port, or path separator — so decoding is exactly
+//  the reverse: take the one path segment, decode it, and that's the
+//  original path string, unchanged (no platform-specific drive-letter
+//  slicing needed, unlike the previous version).
+//
+//  registerSchemesAsPrivileged() MUST run before app 'ready' — hence
+//  module-level, not inside whenReady().
+// ──────────────────────────────────────────────────────────────────
+
+protocol.registerSchemesAsPrivileged([
+  {
+    scheme: "strip-file",
+    privileges: {
+      standard: true,
+      secure: true,
+      supportFetchAPI: true,
+      stream: true,
+      bypassCSP: false,
+    },
+  },
+]);
+
+function registerStripFileProtocol() {
+  protocol.handle("strip-file", async (request) => {
+    try {
+      const url = new URL(request.url);
+      // pathname is "/" + the single encodeURIComponent'd path segment
+      // built by renderer/src/lib/fileUrl.js — decoding it recovers the
+      // exact original path string (backslashes, drive letter, spaces,
+      // unicode, all intact), no reconstruction needed.
+      const filePath = decodeURIComponent(url.pathname.slice(1));
+      // Awaited (not just returned) so a fetch failure — e.g. the file
+      // genuinely doesn't exist — is caught here and turned into a
+      // readable error response, instead of becoming an unhandled
+      // promise rejection that surfaces to the renderer as an opaque
+      // net::ERR_UNEXPECTED with no diagnostic information.
+      return await net.fetch(pathToFileURL(filePath).toString());
+    } catch (e) {
+      return new Response(`strip-file protocol error: ${e.message}`, {
+        status: 404,
+      });
+    }
+  });
+}
 
 // ──────────────────────────────────────────────────────────────────
 //  Config persistence
@@ -44,8 +111,6 @@ function loadConfig() {
     overwrite: false,
     lazyLoading: true,
     preloadNextChapter: true,
-    // seriesKey (series directory) -> { url, title, enabled, days,
-    // lastRun, lastResult, lastDownloadedCount, lastError, lastCheckedAt }
     schedules: {},
   };
 }
@@ -55,7 +120,6 @@ function saveConfig(cfg) {
 }
 
 let appConfig = loadConfig();
-// Upgrade path for config.json files saved before the scheduler existed.
 if (!appConfig.schedules) appConfig.schedules = {};
 
 // ──────────────────────────────────────────────────────────────────
@@ -73,15 +137,19 @@ function createMainWindow() {
     titleBarStyle: process.platform === "darwin" ? "hiddenInset" : "default",
     backgroundColor: "#f5f1e6",
     webPreferences: {
-      preload: path.join(__dirname, "preload.js"),
+      preload: path.join(__dirname, "../preload/preload.js"),
       contextIsolation: true,
       nodeIntegration: false,
-      // v2: webSecurity enabled; CSP in index.html allows file: images
       webSecurity: true,
     },
   });
 
-  mainWindow.loadFile(path.join(__dirname, "../src/index.html"));
+  if (process.env.ELECTRON_RENDERER_URL) {
+    mainWindow.loadURL(process.env.ELECTRON_RENDERER_URL);
+  } else {
+    mainWindow.loadFile(path.join(__dirname, "../renderer/index.html"));
+  }
+
   if (isDev) mainWindow.webContents.openDevTools();
   mainWindow.on("closed", () => {
     mainWindow = null;
@@ -89,6 +157,7 @@ function createMainWindow() {
 }
 
 app.whenReady().then(() => {
+  registerStripFileProtocol();
   createMainWindow();
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) createMainWindow();
@@ -137,10 +206,6 @@ ipcMain.handle("config:set", (_, updates) => {
 //  IPC — Library scanning
 // ──────────────────────────────────────────────────────────────────
 
-// Matches chapter directory names produced by the Python side's
-// downloader._chapter_dirname():
-//   "012"   -> whole chapter 12
-//   "012_5" -> half chapter 12.5
 const CHAPTER_DIR_RE = /^(\d+)(?:_(\d))?$/;
 
 ipcMain.handle("library:scan", () => {
@@ -230,17 +295,6 @@ ipcMain.handle("progress:set", (_, key, pageIndex) => {
 
 const activeDownloads = new Map();
 
-/**
- * Spawn `stripdl download` and stream its JSON progress to the renderer
- * (if a window exists) over the same "download:progress" channel used by
- * manual downloads, so the tray reflects auto-triggered downloads too.
- *
- * Returns { downloadId, done }. `done` resolves once the process exits
- * with { downloadedCount, hadError, errorMessage } — it never rejects;
- * spawn/runtime failures are captured in the resolved value so callers (in
- * particular the scheduler) don't need their own try/catch around every
- * possible failure mode.
- */
 function spawnDownload({ url, chapters, downloadDir, extraArgs = [] }) {
   const args = ["download", url, "--json-progress"];
   if (chapters) args.push("--chapters", chapters);
@@ -268,20 +322,12 @@ function spawnDownload({ url, chapters, downloadDir, extraArgs = [] }) {
     try {
       child = spawn(cliPath, args, { env: { ...process.env } });
     } catch (e) {
-      // Synchronous spawn failure (rare, platform-dependent) — resolve
-      // rather than throw so callers never need to wrap this in try/catch.
       resolve({ downloadedCount: 0, hadError: true, errorMessage: e.message });
       return;
     }
 
     activeDownloads.set(downloadId, child);
 
-    // Previously unhandled: an 'error' event on a ChildProcess with no
-    // listener is an uncaught, fatal exception in Node. If `stripdl` isn't
-    // on PATH (or the bundled binary is missing in a packaged build),
-    // spawn() emits 'error' asynchronously — this listener is what stops
-    // that from crashing the entire main process instead of just failing
-    // the one download.
     child.on("error", (e) => {
       hadError = true;
       errorMessage = e.message;
@@ -350,16 +396,6 @@ ipcMain.handle("download:active", () => [...activeDownloads.keys()]);
 // ──────────────────────────────────────────────────────────────────
 //  Scheduler — per-series "auto-download on release day"
 // ──────────────────────────────────────────────────────────────────
-//
-// Each series can be subscribed to specific local weekdays (e.g. "every
-// Thursday"). A background tick (desktop/main/scheduler.js) checks, at
-// most every 15 minutes, whether today is a scheduled day for a series
-// that hasn't already been checked today — and if the machine is online,
-// runs a normal `stripdl download` for it, which naturally only pulls
-// chapters that aren't already on disk via the existing resume logic.
-//
-// Schedules are keyed by series directory (stable across renames of the
-// download root) and persisted in appConfig.schedules.
 
 let scheduler = null;
 
@@ -375,9 +411,6 @@ function notifySchedule(entry, result) {
   }
 
   if (!Notification.isSupported()) return;
-  // Only surface a native notification when there's something worth
-  // interrupting the user for — new chapters, or a failure they'd want to
-  // know about. A "checked, nothing new" result stays silent.
   if (result.hadError) {
     new Notification({
       title: `Strip — couldn't check ${title}`,
@@ -416,10 +449,6 @@ function initScheduler() {
     },
   });
 
-  // Catch up promptly after the machine wakes from sleep, rather than
-  // waiting for the next 15-minute tick — this is the main real-world case
-  // where "today's schedule" and "actually online" become true at the same
-  // moment (laptop closed overnight, opened Thursday morning).
   powerMonitor.on("resume", () => scheduler.runNow());
 }
 
@@ -440,12 +469,6 @@ ipcMain.handle("schedule:runNow", async () => {
 // ──────────────────────────────────────────────────────────────────
 //  IPC — File system operations
 // ──────────────────────────────────────────────────────────────────
-
-// v3: Deletion confirmation now happens in-app via a custom DOM modal
-// (see src/js/app.js) instead of a blocking native dialog.showMessageBox
-// call. These handlers assume the renderer has already confirmed the
-// action and perform the erasure fully asynchronously so the main thread
-// is never blocked on disk I/O for large chapter/series directories.
 
 ipcMain.handle("fs:deleteSeries", async (_, seriesDir) => {
   try {
