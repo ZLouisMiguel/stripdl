@@ -1,4 +1,15 @@
+markdown
+
 # stripdl ◈
+
+███████╗████████╗██████╗ ██╗██████╗
+██╔════╝╚══██╔══╝██╔══██╗██║██╔══██╗
+███████╗ ██║ ██████╔╝██║██████╔╝
+╚════██║ ██║ ██╔══██╗██║██╔═══╝
+███████║ ██║ ██║ ██║██║██║
+╚══════╝ ╚═╝ ╚═╝ ╚═╝╚═╝╚═╝
+
+Webtoon downloader & library manager — v2.
 
 **A webtoon downloader and reader from URL to offline library in one command.**
 
@@ -15,7 +26,7 @@
 Strip is two things that work together:
 
 - **`stripdl`** — a Python CLI that downloads entire webtoon series from Webtoons.com, saving each chapter as a folder of images with full resume support
-- **Strip Reader** — an Electron desktop app that reads your local library with a smooth, scrolling reader interface
+- **Strip Reader** — an Electron + React desktop app that reads your local library with a smooth, scrolling reader interface
 
 Downloads are stored in a clean folder structure on your machine. No account, no DRM, no internet connection needed to read.
 
@@ -35,6 +46,8 @@ Strip Reader is a three-panel desktop app built on Electron:
 - _Appearance_ — light / dark / system theme
 
 **Download tray** — a persistent bottom drawer that handles downloads without navigating away from what you're reading. Paste a URL, hit start, and a live progress card appears showing per-chapter progress bars with page counts. Multiple jobs queue automatically. The tray stays open across navigation and collapses to a badge when minimised.
+
+**Auto-download** — subscribe any series to specific weekdays (e.g. "every Thursday") from its detail page, and Strip checks for new chapters and downloads them automatically in the background while the app is open, notifying you when something new arrives.
 
 ## Quick start
 
@@ -71,7 +84,7 @@ stripdl config --set image_quality=90
 ```bash
 cd desktop
 npm install
-npm start
+npm run dev
 ```
 
 ---
@@ -92,7 +105,7 @@ cd ..
 # Reader
 cd desktop
 npm install
-npm start
+npm run dev
 ```
 
 ## How it works
@@ -135,6 +148,10 @@ JSON event stream (subset):
 {"status": "chapter_done",  "chapter": 1, "pages_saved": 64}
 {"status": "done",          "series": "Tower of God", "directory": "..."}
 ```
+
+### Local image access
+
+Cover images and chapter pages are served to the renderer through a custom `strip-file://` protocol registered in the main process, rather than plain `file://` URLs — this keeps local images loading correctly both in development (where the renderer runs on Vite's dev server, an `http://` origin) and in a packaged build alike.
 
 ## Folder structure
 
@@ -236,55 +253,10 @@ npm run build:linux  # Linux    (.AppImage)
 
 ## Platform notes
 
-| Platform | Note                                                                       |
-| -------- | -------------------------------------------------------------------------- |
-| Windows  | CLI named `stripdl` to avoid conflict with GNU Binutils `strip.exe`        |
-| Windows  | `file://` image paths use forward slashes (`filePath.replace(/\\/g, "/")`) |
-
-## Changelog
-
-### v0.3.1
-
-- **fix:** Chapter-list pagination infinite loop — Webtoons echoes the last valid page for out-of-range requests; pagination now terminates via episode-number deduplication
-- **fix:** Downloads were starting from the newest chapter — list sorted ascending before the download queue is populated so chapter 1 always downloads first
-- **fix:** Connection timeouts — persistent `Session` + `HTTPAdapter(Retry(...))` replaces bare `requests.get()` for automatic retry on TCP failures and 5xx responses
-- **fix:** Removed 0.3 s artificial sleep between chapter-list page requests
-- **fix:** `build_cli.py` now auto-installs PyInstaller if not present instead of crashing
-- **feat:** `--start N` / `-s N` — download from chapter N through the latest
-- **fix:** Broken `core.strip` import paths in cached series-info lookup and `config --reset`, both of which raised `ModuleNotFoundError`
-- **fix:** `SeriesLock`'s stale-lock check could call `TerminateProcess` on an unrelated process on Windows; replaced with a query-only PID check
-- **fix:** Half-chapters (e.g. 12.5) collided with their preceding whole chapter on disk, silently overwriting images/metadata; each chapter number now gets a distinct folder
-- **fix:** Series-metadata cache lookups compared against the raw user-provided URL instead of its canonical form, so `/viewer` links never hit the cache
-- **feat:** `--cache-ttl N` and `--overwrite` exposed as CLI flags (previously `--overwrite` was `config`-only, and there was no way to set a non-zero/non-default cache TTL from the CLI or the desktop app)
-- **refactor:** Electron's download-config-to-CLI-flag translation centralized in `desktop/main/configKeys.js` instead of hand-written per-setting branches
-- **docs:** Fixed `electron-app/` → `desktop/` and root-level → `core/` path references throughout README and CONTRIBUTING
-
-### v0.3.0
-
-- Concurrent chapter downloads with configurable worker count
-- Pipelined chapter-list fetch and image download
-- Partial chapter resume — only missing images re-downloaded
-- Optional SHA-256 integrity verification (`--verify`)
-- Series metadata cache with configurable TTL
-- Token-bucket rate limiter shared across all download threads
-- Per-series file lock prevents duplicate concurrent downloads
-- Lazy image loading and next-chapter preload in the reader
-- Right-click context menus, keyboard shortcuts, toast notifications in Electron app
-
-### v0.2.1
-
-- Fixed frozen "Fetching chapter list…" progress spinner
-
-### v0.2.0
-
-- Sequential chapter downloads (fixed ThreadPoolExecutor ordering bug)
-- Rate-limit backoff on 429/503
-- Correct cover image extraction
-- Persistent download tray in Electron app
-
-### v0.1.0
-
-- Initial release
+| Platform | Note                                                                                                                                                                    |
+| -------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Windows  | CLI named `stripdl` to avoid conflict with GNU Binutils `strip.exe`                                                                                                     |
+| Windows  | Local images served via the `strip-file://` protocol (see "How it works" above) rather than `file://`, which avoids a Windows-specific drive-letter URL-parsing pitfall |
 
 ## Contributing
 
@@ -297,6 +269,28 @@ See **[CONTRIBUTING.md](CONTRIBUTING.md)** for:
 - Code conventions and commit message format
 - How to submit a pull request
 
+See **[CHANGELOG.md](CHANGELOG.md)** for release history.
+
 ## License
 
 MIT
+
+Commit message:
+
+docs(readme): split changelog into CHANGELOG.md; add CLI banner; misc accuracy fixes
+
+- Add the actual stripdl CLI startup banner (verbatim from cli.py's
+  group docstring) as a code block near the top of the README, so it
+  doubles as a preview of what running the tool looks like.
+- Remove the Changelog section — full history now lives in the new
+  CHANGELOG.md, linked from Contributing.
+- Update "Reader app" quick-start from `npm start` (now runs
+  electron-vite preview, i.e. the built app) to `npm run dev` (the
+  actual dev-server command as of the electron-vite migration).
+- Add brief "Auto-download" bullet under The app, and a short "Local
+  image access" note under How it works, describing the strip-file://
+  protocol and why it exists — both features/fixes landed since the
+  README was last touched but weren't documented here.
+- Platform notes: replace the stale file:// forward-slash note (no
+  longer accurate — images are served via strip-file:// now) with a
+  note on why that protocol is used on Windows specifically.
