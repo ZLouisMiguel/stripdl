@@ -1,6 +1,3 @@
-File 2 (new) — CHANGELOG.md
-markdown
-
 # Changelog
 
 All notable changes to this project are documented here.
