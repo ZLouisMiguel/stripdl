@@ -1,28 +1,29 @@
 // desktop/renderer/src/components/SeriesCard.jsx
 //
-// Port of app.js's buildSeriesCard(). The "Continue" badge calls the
-// onContinue prop (jumps straight into the Reader at the last-read
-// chapter/page) rather than falling through to onOpen (series detail).
+// Adds a visible delete button and bulk-select support alongside the
+// existing right-click delete. selectMode/selected/onToggleSelect are
+// optional — omitting them keeps the card behaving exactly as before.
 
 import React from "react";
 import { useToast } from "../context/ToastContext.jsx";
 import { useConfirm } from "../context/ConfirmContext.jsx";
 import { toFileUrl } from "../lib/fileUrl.js";
 
-export default function SeriesCard({ series, onOpen, onContinue, onDeleted }) {
+export default function SeriesCard({
+  series,
+  onOpen,
+  onContinue,
+  onDeleted,
+  selectMode = false,
+  selected = false,
+  onToggleSelect,
+}) {
   const { showToast } = useToast();
   const confirm = useConfirm();
 
   const coverSrc = toFileUrl(series.coverPath);
 
-  async function handleContextMenu(e) {
-    e.preventDefault();
-    const action = await window.strip.menu.seriesContext({
-      seriesDir: series.directory,
-      seriesTitle: series.title,
-    });
-    if (action !== "delete") return;
-
+  async function deleteSeries() {
     const confirmed = await confirm(
       "Delete series",
       `Permanently delete "${series.title}" from disk? This cannot be undone.`,
@@ -38,13 +39,66 @@ export default function SeriesCard({ series, onOpen, onContinue, onDeleted }) {
     }
   }
 
+  async function handleContextMenu(e) {
+    e.preventDefault();
+    if (selectMode) return;
+    const action = await window.strip.menu.seriesContext({
+      seriesDir: series.directory,
+      seriesTitle: series.title,
+    });
+    if (action === "delete") deleteSeries();
+  }
+
+  function handleCardClick() {
+    if (selectMode) onToggleSelect?.(series.directory);
+    else onOpen(series);
+  }
+
   return (
     <div
-      className="series-card"
-      onClick={() => onOpen(series)}
+      className={`series-card ${selectMode ? "select-mode" : ""} ${
+        selected ? "is-selected" : ""
+      }`}
+      onClick={handleCardClick}
       onContextMenu={handleContextMenu}
     >
       <div className="series-cover-wrap">
+        {selectMode && (
+          <label
+            className="series-card-checkbox"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <input
+              type="checkbox"
+              checked={selected}
+              onChange={() => onToggleSelect?.(series.directory)}
+            />
+          </label>
+        )}
+
+        {!selectMode && (
+          <button
+            className="series-card-delete-btn"
+            title="Delete series"
+            onClick={(e) => {
+              e.stopPropagation();
+              deleteSeries();
+            }}
+          >
+            <svg
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+            >
+              <polyline points="3 6 5 6 21 6" />
+              <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" />
+              <path d="M10 11v6M14 11v6" />
+              <path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2" />
+            </svg>
+          </button>
+        )}
+
         {coverSrc ? (
           <img
             className="series-cover"
@@ -58,7 +112,7 @@ export default function SeriesCard({ series, onOpen, onContinue, onDeleted }) {
         <span className="series-card-badge">
           {series.chapters?.length ?? 0} ch
         </span>
-        {series.lastRead && (
+        {!selectMode && series.lastRead && (
           <div
             className="series-card-continue-badge"
             onClick={(e) => {

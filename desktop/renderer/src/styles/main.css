@@ -1727,3 +1727,121 @@ select {
   margin-top: 10px;
   font-size: 12px;
 }
+
+/* ── Select mode / bulk delete ──────────────────────────────── */
+.select-count {
+  font-size: 13px;
+  color: var(--text-muted);
+  margin-right: 4px;
+}
+
+/* Series card */
+.series-card-delete-btn {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  width: 26px;
+  height: 26px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  border-radius: 50%;
+  background: rgba(0, 0, 0, 0.55);
+  color: #fff;
+  opacity: 0;
+  transform: translateY(-4px);
+  transition:
+    opacity 0.15s,
+    transform 0.15s,
+    background 0.15s;
+  z-index: 2;
+}
+.series-card-delete-btn svg {
+  width: 13px;
+  height: 13px;
+}
+.series-card:hover .series-card-delete-btn {
+  opacity: 1;
+  transform: none;
+}
+.series-card-delete-btn:hover {
+  background: var(--danger);
+}
+
+.series-card-checkbox {
+  position: absolute;
+  top: 6px;
+  left: 6px;
+  z-index: 2;
+  width: 20px;
+  height: 20px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.55);
+  border-radius: 5px;
+}
+.series-card-checkbox input {
+  width: 14px;
+  height: 14px;
+  cursor: pointer;
+}
+
+.series-card.select-mode .series-cover-wrap {
+  outline: 2px solid transparent;
+  transition: outline-color 0.15s;
+}
+.series-card.select-mode.is-selected .series-cover-wrap {
+  outline-color: var(--steel);
+}
+
+/* Chapter row */
+.chapter-row {
+  position: relative;
+}
+.chapter-row-delete-btn {
+  width: 22px;
+  height: 22px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  border-radius: var(--r-sm);
+  background: transparent;
+  color: var(--text-muted);
+  opacity: 0;
+  transition:
+    opacity 0.15s,
+    background 0.15s,
+    color 0.15s;
+  flex-shrink: 0;
+}
+.chapter-row-delete-btn svg {
+  width: 14px;
+  height: 14px;
+}
+.chapter-row:hover .chapter-row-delete-btn {
+  opacity: 1;
+}
+.chapter-row-delete-btn:hover {
+  background: var(--danger);
+  color: #fff;
+}
+
+.chapter-row.select-mode {
+  grid-template-columns: 22px 52px 1fr auto;
+}
+.chapter-row-checkbox {
+  display: flex;
+  align-items: center;
+}
+.chapter-row-checkbox input {
+  width: 15px;
+  height: 15px;
+  cursor: pointer;
+}
+.chapter-row.select-mode.is-selected {
+  background: var(--steel-muted);
+  border-color: var(--steel);
+}

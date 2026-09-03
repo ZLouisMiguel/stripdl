@@ -1,8 +1,4 @@
 // desktop/renderer/src/views/SeriesDetailView.jsx
-//
-// Full port of the old openSeries()/buildChapterRows() pair. Read,
-// Continue Reading, and chapter-row clicks open the real Reader via
-// onOpenChapter/onContinue props.
 
 import React, { useEffect, useState } from "react";
 import { useToast } from "../context/ToastContext.jsx";
@@ -25,9 +21,14 @@ export default function SeriesDetailView({
 
   const [series, setSeries] = useState(initialSeries);
   const [chapterProgress, setChapterProgress] = useState({});
+  const [selectMode, setSelectMode] = useState(false);
+  const [selectedChapters, setSelectedChapters] = useState(new Set());
+  const [deleting, setDeleting] = useState(false);
 
   useEffect(() => {
     setSeries(initialSeries);
+    setSelectMode(false);
+    setSelectedChapters(new Set());
   }, [initialSeries]);
 
   useEffect(() => {
@@ -71,8 +72,31 @@ export default function SeriesDetailView({
   const coverSrc = toFileUrl(series.coverPath);
   const tags = [series.genre, series.status].filter(Boolean);
 
+  async function deleteChapter(chapter) {
+    const confirmed = await confirm(
+      "Delete chapter",
+      `Permanently delete Chapter ${chapter.number}? This cannot be undone.`,
+    );
+    if (!confirmed) return;
+
+    const result = await window.strip.fs.deleteChapter(chapter.directory);
+    if (result?.success) {
+      setSeries((prev) => ({
+        ...prev,
+        chapters: prev.chapters.filter(
+          (c) => c.directory !== chapter.directory,
+        ),
+      }));
+      invalidateLibraryCache();
+      showToast(`Chapter ${chapter.number} deleted.`, "success");
+    } else {
+      showToast(`Delete failed: ${result?.error || "Unknown error"}`, "error");
+    }
+  }
+
   async function handleChapterContextMenu(e, chapter) {
     e.preventDefault();
+    if (selectMode) return;
     const action = await window.strip.menu.chapterContext({
       chapterDir: chapter.directory,
       chapterNumber: chapter.number,
@@ -93,28 +117,63 @@ export default function SeriesDetailView({
       setChapterProgress((prev) => ({ ...prev, [chapter.number]: lastPage }));
       showToast(`Ch.${chapter.number} marked as read.`, "success");
     } else if (action === "delete") {
-      const confirmed = await confirm(
-        "Delete chapter",
-        `Permanently delete Chapter ${chapter.number}? This cannot be undone.`,
-      );
-      if (!confirmed) return;
+      deleteChapter(chapter);
+    }
+  }
 
-      const result = await window.strip.fs.deleteChapter(chapter.directory);
-      if (result?.success) {
-        setSeries((prev) => ({
-          ...prev,
-          chapters: prev.chapters.filter(
-            (c) => c.directory !== chapter.directory,
-          ),
-        }));
-        invalidateLibraryCache();
-        showToast(`Chapter ${chapter.number} deleted.`, "success");
-      } else {
-        showToast(
-          `Delete failed: ${result?.error || "Unknown error"}`,
-          "error",
-        );
-      }
+  function toggleSelectMode() {
+    setSelectMode((v) => !v);
+    setSelectedChapters(new Set());
+  }
+
+  function toggleSelectChapter(directory) {
+    setSelectedChapters((prev) => {
+      const next = new Set(prev);
+      next.has(directory) ? next.delete(directory) : next.add(directory);
+      return next;
+    });
+  }
+
+  async function deleteSelectedChapters() {
+    if (selectedChapters.size === 0 || deleting) return;
+    const targets = series.chapters.filter((c) =>
+      selectedChapters.has(c.directory),
+    );
+    const confirmed = await confirm(
+      "Delete chapters",
+      `Permanently delete ${selectedChapters.size} chapters? This cannot be undone.`,
+    );
+    if (!confirmed) return;
+
+    setDeleting(true);
+    const results = await Promise.all(
+      targets.map((c) => window.strip.fs.deleteChapter(c.directory)),
+    );
+
+    const deletedDirs = new Set(
+      targets.filter((_, i) => results[i]?.success).map((c) => c.directory),
+    );
+    const successCount = deletedDirs.size;
+
+    if (successCount > 0) {
+      setSeries((prev) => ({
+        ...prev,
+        chapters: prev.chapters.filter((c) => !deletedDirs.has(c.directory)),
+      }));
+      invalidateLibraryCache();
+    }
+
+    setDeleting(false);
+    setSelectedChapters(new Set());
+    setSelectMode(false);
+
+    if (successCount === targets.length) {
+      showToast(`${successCount} chapters deleted.`, "success");
+    } else {
+      showToast(
+        `${successCount}/${targets.length} deleted — some failed.`,
+        successCount > 0 ? "info" : "error",
+      );
     }
   }
 
@@ -222,6 +281,31 @@ export default function SeriesDetailView({
             {series.chapters?.length ?? 0}
           </span>
         </h2>
+        <div className="header-actions">
+          {!selectMode && series.chapters?.length > 0 && (
+            <button className="btn btn-ghost" onClick={toggleSelectMode}>
+              Select
+            </button>
+          )}
+          {selectMode && (
+            <>
+              <span className="select-count">
+                {selectedChapters.size} selected
+              </span>
+              <button
+                className="btn btn-danger"
+                disabled={selectedChapters.size === 0 || deleting}
+                onClick={deleteSelectedChapters}
+              >
+                Delete
+                {selectedChapters.size > 0 ? ` (${selectedChapters.size})` : ""}
+              </button>
+              <button className="btn btn-ghost" onClick={toggleSelectMode}>
+                Cancel
+              </button>
+            </>
+          )}
+        </div>
       </div>
       <div className="chapter-list">
         {!series.chapters?.length && (
@@ -232,20 +316,58 @@ export default function SeriesDetailView({
         {series.chapters?.map((ch) => {
           const hasProgress = (chapterProgress[ch.number] || 0) > 0;
           const isLastRead = lastRead && lastRead.chapterNumber == ch.number;
+          const isSelected = selectedChapters.has(ch.directory);
           return (
             <div
               key={ch.directory}
               className={`chapter-row ${hasProgress ? "has-progress" : ""} ${
                 isLastRead ? "last-read" : ""
-              }`}
-              onClick={() => onOpenChapter(ch, 0)}
+              } ${selectMode ? "select-mode" : ""} ${isSelected ? "is-selected" : ""}`}
+              onClick={() =>
+                selectMode
+                  ? toggleSelectChapter(ch.directory)
+                  : onOpenChapter(ch, 0)
+              }
               onContextMenu={(e) => handleChapterContextMenu(e, ch)}
             >
+              {selectMode && (
+                <label
+                  className="chapter-row-checkbox"
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  <input
+                    type="checkbox"
+                    checked={isSelected}
+                    onChange={() => toggleSelectChapter(ch.directory)}
+                  />
+                </label>
+              )}
               <span className="chapter-num">{ch.number}</span>
               <span className="chapter-title">{ch.title}</span>
               <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
                 <span className="chapter-date">{ch.date ?? ""}</span>
                 <div className="chapter-progress-dot" title="In progress" />
+                {!selectMode && (
+                  <button
+                    className="chapter-row-delete-btn"
+                    title="Delete chapter"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      deleteChapter(ch);
+                    }}
+                  >
+                    <svg
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="2"
+                    >
+                      <polyline points="3 6 5 6 21 6" />
+                      <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" />
+                      <path d="M10 11v6M14 11v6" />
+                    </svg>
+                  </button>
+                )}
               </div>
             </div>
           );
