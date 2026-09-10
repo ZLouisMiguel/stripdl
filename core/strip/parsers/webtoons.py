@@ -26,11 +26,25 @@
 #   FIX: Exposed the existing _normalize_url() logic via
 #        SiteParser.canonicalize_url(), so the downloader can normalize
 #        before doing cache lookups.
+#
+#   PROBLEM: Pagination termination (iter_chapter_list) judged whether a
+#            page was the last page using len() of the FILTERED chapter
+#            list — i.e. after _parse_items() had already dropped locked/
+#            paywalled entries. A page with 10 raw items but 1 locked
+#            chapter filtered down to 9, which read as "last page" and
+#            stopped pagination immediately, silently dropping every
+#            earlier page of chapters (e.g. a 161-episode series with one
+#            locked chapter on page 1 only ever discovered the newest 9
+#            chapters).
+#   FIX: _fetch_chapter_page() now returns the raw per-page item count
+#        alongside the filtered chapters (_count_page_items()), and both
+#        termination checks in iter_chapter_list() use the raw count
+#        instead of the filtered one.
 
 import re
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from typing import Iterator, List
+from typing import Iterator, List, Tuple
 from urllib.parse import urlparse, parse_qs, urlencode, urlunparse
 
 import requests
@@ -165,6 +179,20 @@ def _parse_items(soup: BeautifulSoup) -> List[ChapterInfo]:
     return chapters
 
 
+def _count_page_items(soup: BeautifulSoup) -> int:
+    """
+    Raw number of list items Webtoons rendered for this pagination page,
+    BEFORE filtering out locked/paywalled chapters. Pagination termination
+    must be judged against this raw count, not the filtered chapter count
+    _parse_items() returns — a page that happens to contain a locked
+    chapter has a filtered count below 10 even on a full, non-last page,
+    which previously caused pagination to stop after page 1 whenever page 1
+    contained even a single locked chapter, silently dropping every
+    earlier page of chapters.
+    """
+    return len(soup.select("#_listUl li") or soup.select(".detail_lst li"))
+
+
 class WebtoonsParser(SiteParser):
     """Parser for www.webtoons.com (English)."""
 
@@ -210,14 +238,17 @@ class WebtoonsParser(SiteParser):
 
     # ── chapter list ───────────────────────────────────────────────────────────
 
-    def _fetch_chapter_page(self, url: str, page: int) -> List[ChapterInfo]:
+    def _fetch_chapter_page(self, url: str, page: int) -> Tuple[List[ChapterInfo], int]:
         """
-        Fetch one pagination page (up to 10 items).
-        Returns [] when there are no more pages.
-        Used by both iter_chapter_list and the CLI live counter.
+        Fetch one pagination page.
+        Returns (chapters, raw_item_count). chapters excludes locked/paywalled
+        entries; raw_item_count is the true number of items Webtoons rendered
+        for this page and is what iter_chapter_list uses to detect the last
+        page — see _count_page_items().
         """
         list_url = _normalize_url(url)
-        return _parse_items(_soup(_page_url(list_url, page)))
+        soup = _soup(_page_url(list_url, page))
+        return _parse_items(soup), _count_page_items(soup)
 
     def iter_chapter_list(self, url: str) -> Iterator[ChapterInfo]:
         """
@@ -225,25 +256,34 @@ class WebtoonsParser(SiteParser):
         Pages are fetched in parallel batches of _CONCURRENT_PAGES.
         Yields in site order (newest chapters first on Webtoons).
 
-        Termination is done via deduplication, NOT just len(items) < 10.
-        Webtoons returns the last real page for any out-of-range page number
-        instead of returning empty results, so the len<10 check alone causes
-        an infinite loop for series whose last page has exactly 10 chapters.
-        We track seen episode numbers and stop as soon as a page returns only
-        episodes we have already yielded.
+        Termination is judged in two layers:
+          1. Deduplication — Webtoons returns the last real page for any
+             out-of-range page number instead of returning empty results,
+             so a raw-count check alone would infinite-loop for a series
+             whose last page has exactly 10 raw items. We track seen
+             episode numbers and stop as soon as a page returns only
+             episodes we have already yielded.
+          2. Raw item count — whether a page is short/last is judged by
+             the RAW number of list items Webtoons rendered for that page
+             (_count_page_items()), not the filtered chapter count
+             _parse_items() returns. A page with a locked/paywalled
+             chapter has fewer parsed chapters than raw items; using the
+             filtered count as the "last page" signal previously stopped
+             pagination after page 1 whenever page 1 contained even one
+             locked chapter, silently dropping every earlier page.
         """
         seen: set = set()
 
         # Page 1 serial — establishes whether the series has multiple pages
-        p1 = self._fetch_chapter_page(url, 1)
+        p1_chapters, p1_raw = self._fetch_chapter_page(url, 1)
         new_on_p1 = []
-        for ch in p1:
+        for ch in p1_chapters:
             if ch.number not in seen:
                 seen.add(ch.number)
                 new_on_p1.append(ch)
         yield from new_on_p1
 
-        if len(p1) < 10:
+        if p1_raw < 10:
             return  # single-page series
 
         # Remaining pages — parallel batches, yielded in page order
@@ -261,18 +301,19 @@ class WebtoonsParser(SiteParser):
                     try:
                         results[p] = fut.result()
                     except Exception:
-                        results[p] = []
+                        results[p] = ([], 0)
 
                 done = False
                 for p in sorted(results):
-                    items = results[p]
+                    items, raw_count = results[p]
                     new_items = [ch for ch in items if ch.number not in seen]
                     for ch in new_items:
                         seen.add(ch.number)
                     yield from new_items
                     # Stop if this page had no new episodes (Webtoons echo) OR
-                    # had fewer than 10 items (genuine last page)
-                    if not new_items or len(items) < 10:
+                    # was a genuine short/last page (judged by RAW item count,
+                    # not the filtered chapter count — see docstring above).
+                    if not new_items or raw_count < 10:
                         done = True
                         break
                 if done:
