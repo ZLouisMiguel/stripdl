@@ -26,6 +26,23 @@
 #   FIX: Exposed the existing _normalize_url() logic via
 #        SiteParser.canonicalize_url(), so the downloader can normalize
 #        before doing cache lookups.
+#
+#   PROBLEM: Pagination termination (iter_chapter_list) judged whether a
+#            page was the last page using len(items) < 10 — a hardcoded
+#            assumption about how many chapters Webtoons puts on one
+#            page. That assumption is now wrong: as of this writing
+#            Webtoons returns 9 chapters per page, not 10, so EVERY page
+#            looked like a "short/last page" and pagination stopped
+#            after page 1 for every multi-page series, silently dropping
+#            every earlier chapter (a 161-episode series only ever
+#            discovered its newest ~9 chapters).
+#   FIX: Dropped the hardcoded page-size check entirely. Termination is
+#        now judged purely by deduplication — Webtoons already echoes
+#        the last real page for any out-of-range page request instead of
+#        returning empty results, so a page yielding zero chapters we
+#        haven't already seen means we've walked off the end of the
+#        list. This is page-size-agnostic and doesn't break the next
+#        time Webtoons changes how many chapters it puts on a page.
 
 import re
 import threading
@@ -212,9 +229,10 @@ class WebtoonsParser(SiteParser):
 
     def _fetch_chapter_page(self, url: str, page: int) -> List[ChapterInfo]:
         """
-        Fetch one pagination page (up to 10 items).
-        Returns [] when there are no more pages.
-        Used by both iter_chapter_list and the CLI live counter.
+        Fetch one pagination page.
+        Returns [] when there are no more pages (an out-of-range page echoes
+        the last real page, so iter_chapter_list's deduplication — not this
+        return value's length — is what detects the true end of the list).
         """
         list_url = _normalize_url(url)
         return _parse_items(_soup(_page_url(list_url, page)))
@@ -225,16 +243,25 @@ class WebtoonsParser(SiteParser):
         Pages are fetched in parallel batches of _CONCURRENT_PAGES.
         Yields in site order (newest chapters first on Webtoons).
 
-        Termination is done via deduplication, NOT just len(items) < 10.
-        Webtoons returns the last real page for any out-of-range page number
-        instead of returning empty results, so the len<10 check alone causes
-        an infinite loop for series whose last page has exactly 10 chapters.
-        We track seen episode numbers and stop as soon as a page returns only
-        episodes we have already yielded.
+        Termination is judged ENTIRELY by deduplication: Webtoons echoes the
+        last real page for any out-of-range page request instead of returning
+        empty results, so as soon as a page yields zero chapters we haven't
+        already seen, we've walked off the end of the list and can stop.
+
+        Deliberately NOT judged by a fixed "chapters per page" threshold
+        (previously len(items) < 10, and briefly a raw-item-count variant of
+        the same idea): the real page size is a Webtoons implementation
+        detail this project doesn't control, and it has changed — observed
+        to be 9 as of this writing, not the 10 this code used to assume.
+        Hardcoding any specific number made every page look like a
+        short/last page and stopped pagination after page 1 for every
+        multi-page series, silently dropping every earlier chapter. Dedup
+        alone is page-size-agnostic and self-correcting no matter what
+        number Webtoons uses today or changes to next.
         """
         seen: set = set()
 
-        # Page 1 serial — establishes whether the series has multiple pages
+        # Page 1 serial — establishes whether the series has any chapters at all
         p1 = self._fetch_chapter_page(url, 1)
         new_on_p1 = []
         for ch in p1:
@@ -243,8 +270,8 @@ class WebtoonsParser(SiteParser):
                 new_on_p1.append(ch)
         yield from new_on_p1
 
-        if len(p1) < 10:
-            return  # single-page series
+        if not new_on_p1:
+            return  # empty series, or page 1 is already an echo of nothing
 
         # Remaining pages — parallel batches, yielded in page order
         next_page = 2
@@ -270,9 +297,9 @@ class WebtoonsParser(SiteParser):
                     for ch in new_items:
                         seen.add(ch.number)
                     yield from new_items
-                    # Stop if this page had no new episodes (Webtoons echo) OR
-                    # had fewer than 10 items (genuine last page)
-                    if not new_items or len(items) < 10:
+                    # Stop as soon as a page has nothing new — the
+                    # page-size-agnostic signal that we've reached the end.
+                    if not new_items:
                         done = True
                         break
                 if done:
