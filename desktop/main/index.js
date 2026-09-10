@@ -277,9 +277,19 @@ ipcMain.handle("chapter:pages", (_, chapterDir) => {
 //  IPC — Reading progress
 // ──────────────────────────────────────────────────────────────────
 
+// NOTE: this handler backs two different value shapes under one channel —
+// plain numeric page-index progress ("<title>/<chapterNumber>", where 0 is
+// a legitimate "no progress yet" value) and the "<title>/lastRead" key
+// (meant to be an object, or absent entirely for a never-opened series).
+// Returning `?? 0` here used to coerce a missing lastRead into the number
+// 0 instead of an honest "nothing stored," which downstream renderer code
+// then rendered as a stray literal "0" in the UI. Returning `?? null`
+// keeps "missing" unambiguous regardless of which shape the caller
+// expects; callers that want a numeric fallback (e.g. per-chapter
+// progress) now apply `?? 0` themselves on the resolved value.
 ipcMain.handle(
   "progress:get",
-  (_, key) => appConfig.readingProgress?.[key] ?? 0,
+  (_, key) => appConfig.readingProgress?.[key] ?? null,
 );
 
 ipcMain.handle("progress:set", (_, key, pageIndex) => {
