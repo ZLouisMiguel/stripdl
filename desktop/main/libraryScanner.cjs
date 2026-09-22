@@ -1,4 +1,5 @@
 const path = require("node:path");
+const { assertLibraryPath } = require("./pathSafety.cjs");
 
 const CHAPTER_DIR_RE = /^(\d+)(?:_(\d))?$/;
 
@@ -31,10 +32,21 @@ async function scanLibrary(root, fsPromises = require("node:fs/promises")) {
   const series = [];
   for (const entry of entries) {
     if (!entry.isDirectory()) continue;
-    const seriesDir = path.join(root, entry.name);
+    let seriesDir;
+    try {
+      seriesDir = await assertLibraryPath(path.join(root, entry.name), root);
+    } catch (_) {
+      continue;
+    }
     const metaPath = path.join(seriesDir, "metadata.json");
     if (!(await exists(fsPromises, metaPath))) continue;
-    const meta = await readJson(fsPromises, metaPath);
+    let safeMetaPath;
+    try {
+      safeMetaPath = await assertLibraryPath(metaPath, root);
+    } catch (_) {
+      continue;
+    }
+    const meta = await readJson(fsPromises, safeMetaPath);
     const coverPath = path.join(seriesDir, "cover.jpg");
     const chapterEntries = await fsPromises.readdir(seriesDir, { withFileTypes: true });
     const chapters = [];
@@ -45,8 +57,19 @@ async function scanLibrary(root, fsPromises = require("node:fs/promises")) {
       if (!match) continue;
 
       const number = parseInt(match[1], 10) + (match[2] ? parseInt(match[2], 10) / 10 : 0);
-      const chapterDir = path.join(seriesDir, chapterEntry.name);
-      const chapterMeta = await readJson(fsPromises, path.join(chapterDir, "metadata.json"));
+      let chapterDir;
+      try {
+        chapterDir = await assertLibraryPath(path.join(seriesDir, chapterEntry.name), root);
+      } catch (_) {
+        continue;
+      }
+      let chapterMetaPath = path.join(chapterDir, "metadata.json");
+      try {
+        chapterMetaPath = await assertLibraryPath(chapterMetaPath, root);
+      } catch (_) {
+        chapterMetaPath = null;
+      }
+      const chapterMeta = chapterMetaPath ? await readJson(fsPromises, chapterMetaPath) : {};
       const pageFiles = await fsPromises.readdir(chapterDir);
       chapters.push({
         number,
@@ -61,7 +84,9 @@ async function scanLibrary(root, fsPromises = require("node:fs/promises")) {
     series.push({
       ...meta,
       directory: seriesDir,
-      coverPath: (await exists(fsPromises, coverPath)) ? coverPath : null,
+      coverPath: (await exists(fsPromises, coverPath)) &&
+        await assertLibraryPath(coverPath, root).then(() => true, () => false)
+        ? coverPath : null,
       chapters,
     });
   }

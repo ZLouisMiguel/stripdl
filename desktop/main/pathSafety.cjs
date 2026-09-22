@@ -39,4 +39,22 @@ async function assertLibraryPath(target, root, { allowRoot = false } = {}) {
   return realTarget;
 }
 
-module.exports = { assertLibraryPath, LibraryPathError };
+async function assertDirectoryShape(target, root, expectedDepth, chapterDirectory = false) {
+  const realTarget = await assertLibraryPath(target, root);
+  const realRoot = await fs.realpath(root);
+  const segments = path.relative(realRoot, realTarget).split(path.sep);
+  if (segments.length !== expectedDepth ||
+      (chapterDirectory && !/^\d+(?:_\d)?$/.test(segments.at(-1)))) {
+    throw new LibraryPathError("The requested path is not a valid library item.");
+  }
+  const stat = await fs.stat(realTarget);
+  if (!stat.isDirectory()) {
+    throw new LibraryPathError("The requested library item is not a folder.");
+  }
+  return realTarget;
+}
+
+const assertSeriesPath = (target, root) => assertDirectoryShape(target, root, 1);
+const assertChapterPath = (target, root) => assertDirectoryShape(target, root, 2, true);
+
+module.exports = { assertLibraryPath, assertSeriesPath, assertChapterPath, LibraryPathError };

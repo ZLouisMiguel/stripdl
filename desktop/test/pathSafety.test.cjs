@@ -3,7 +3,7 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs/promises");
 const os = require("node:os");
 const path = require("node:path");
-const { assertLibraryPath } = require("../main/pathSafety.cjs");
+const { assertLibraryPath, assertSeriesPath, assertChapterPath } = require("../main/pathSafety.cjs");
 
 async function makeTempLibrary(t) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "strip-library-"));
@@ -42,4 +42,15 @@ test("rejects a directory symlink that resolves outside the library", async (t) 
 test("rejects non-string targets", async (t) => {
   const root = await makeTempLibrary(t);
   await assert.rejects(assertLibraryPath(null, root));
+});
+
+test("deletion helpers distinguish series paths from chapter paths", async (t) => {
+  const root = await makeTempLibrary(t);
+  const series = path.join(root, "Series");
+  const chapter = path.join(series, "001");
+  await fs.mkdir(chapter, { recursive: true });
+  assert.equal(await assertSeriesPath(series, root), await fs.realpath(series));
+  assert.equal(await assertChapterPath(chapter, root), await fs.realpath(chapter));
+  await assert.rejects(assertChapterPath(series, root));
+  await assert.rejects(assertSeriesPath(chapter, root));
 });
