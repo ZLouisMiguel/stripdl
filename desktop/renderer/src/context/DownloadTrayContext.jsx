@@ -66,6 +66,7 @@ function newJob(downloadId, url) {
     title: null,
     active: true,
     status: "starting",
+    failureMessage: null,
     totalChapters: 0,
     chaptersCompleted: 0,
     chapters: {}, // chapterId -> { title, done, total, statusText }
@@ -202,6 +203,24 @@ function applyProgress(job, data) {
       };
     }
 
+    case "chapter_error": {
+      const chId = data.chapter_id ?? data.chapter;
+      const { chapters, chapterOrder } = touchChapter(
+        job.chapters, job.chapterOrder, chId, data.title,
+      );
+      const chapter = chapters[chId];
+      return {
+        ...job,
+        chapters: { ...chapters, [chId]: { ...chapter, statusText: "✗ failed" } },
+        chapterOrder,
+        failureMessage: data.failureMessage || data.message || job.failureMessage,
+        log: appendLog(job.log, {
+          msg: data.failureMessage || `Chapter ${chId} failed: ${data.message}`,
+          type: "error",
+        }),
+      };
+    }
+
     case "rate_limited": {
       const chId = data.chapter_id ?? data.chapter;
       if (!chId || !job.chapters[chId]) return job;
@@ -218,6 +237,9 @@ function applyProgress(job, data) {
     }
 
     case "done":
+      if (job.failureMessage) {
+        return { ...job, status: "partial", active: false };
+      }
       return {
         ...job,
         title: data.series || job.title,
@@ -226,6 +248,18 @@ function applyProgress(job, data) {
         log: appendLog(job.log, {
           msg: `✓ Saved to ${data.directory}`,
           type: "info",
+        }),
+      };
+
+    case "partial":
+      return {
+        ...job,
+        status: "partial",
+        active: false,
+        failureMessage: data.failureMessage || data.message || job.failureMessage,
+        log: appendLog(job.log, {
+          msg: data.failureMessage || data.message || "Some chapters failed. Retry to fetch the missing pages.",
+          type: "error",
         }),
       };
 
@@ -246,20 +280,37 @@ function applyProgress(job, data) {
         ...job,
         status: "error",
         active: false,
+        failureMessage: data.failureMessage || data.message || job.failureMessage,
         log: appendLog(job.log, { msg: `✗ ${data.message}`, type: "error" }),
       };
     }
 
     case "process_exit":
-      if (data.code === 0 || !job.active) return job;
+      if (!job.active) return job;
+      if (data.code === 0) {
+        return {
+          ...job,
+          status: "error",
+          active: false,
+          failureMessage: "stripdl exited without reporting a completed download.",
+          log: appendLog(job.log, { msg: "Download ended without a completion result.", type: "error" }),
+        };
+      }
       return {
         ...job,
-        status: "error",
+        status: job.failureMessage ? "partial" : "error",
         active: false,
+        failureMessage: data.errorMessage || job.failureMessage,
         log: appendLog(job.log, {
-          msg: `Process exited (code ${data.code})`,
+          msg: data.errorMessage || `Process exited (code ${data.code})`,
           type: "error",
         }),
+      };
+
+    case "diagnostic":
+      return {
+        ...job,
+        log: appendLog(job.log, { msg: data.message, type: "info" }),
       };
 
     case "log":
