@@ -5,6 +5,7 @@
   "description": "Webtoon reader powered by strip",
   "main": "out/main/index.js",
   "scripts": {
+    "test": "node --test",
     "dev": "electron-vite dev",
     "build": "electron-vite build",
     "preview": "electron-vite preview",

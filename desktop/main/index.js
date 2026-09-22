@@ -20,6 +20,7 @@ const { pathToFileURL } = require("url");
 const { spawn } = require("child_process");
 const { buildDownloadConfigArgs } = require("./configKeys");
 const { startScheduler } = require("./scheduler");
+const { assertLibraryPath } = require("./pathSafety.cjs");
 
 const isDev =
   process.argv.includes("--dev") || !!process.env.ELECTRON_RENDERER_URL;
@@ -264,13 +265,14 @@ ipcMain.handle("library:scan", () => {
 //  IPC — Chapter pages
 // ──────────────────────────────────────────────────────────────────
 
-ipcMain.handle("chapter:pages", (_, chapterDir) => {
-  if (!fs.existsSync(chapterDir)) return [];
-  return fs
-    .readdirSync(chapterDir)
-    .filter((f) => f.endsWith(".jpg") && !f.startsWith("cover"))
-    .sort()
-    .map((f) => path.join(chapterDir, f));
+ipcMain.handle("chapter:pages", async (_, chapterDir) => {
+  const safeChapterDir = await assertLibraryPath(chapterDir, appConfig.downloadDir);
+  const names = await fs.promises.readdir(safeChapterDir);
+  const pages = [];
+  for (const name of names.filter((f) => f.endsWith(".jpg") && !f.startsWith("cover")).sort()) {
+    pages.push(await assertLibraryPath(path.join(safeChapterDir, name), appConfig.downloadDir));
+  }
+  return pages;
 });
 
 // ──────────────────────────────────────────────────────────────────
@@ -482,8 +484,9 @@ ipcMain.handle("schedule:runNow", async () => {
 
 ipcMain.handle("fs:deleteSeries", async (_, seriesDir) => {
   try {
-    await fs.promises.rm(seriesDir, { recursive: true, force: true });
-    return { success: true, directory: seriesDir };
+    const safePath = await assertLibraryPath(seriesDir, appConfig.downloadDir);
+    await fs.promises.rm(safePath, { recursive: true, force: true });
+    return { success: true, directory: safePath };
   } catch (e) {
     return { success: false, error: e.message };
   }
@@ -491,22 +494,25 @@ ipcMain.handle("fs:deleteSeries", async (_, seriesDir) => {
 
 ipcMain.handle("fs:deleteChapter", async (_, chapterDir) => {
   try {
-    await fs.promises.rm(chapterDir, { recursive: true, force: true });
-    return { success: true, directory: chapterDir };
+    const safePath = await assertLibraryPath(chapterDir, appConfig.downloadDir);
+    await fs.promises.rm(safePath, { recursive: true, force: true });
+    return { success: true, directory: safePath };
   } catch (e) {
     return { success: false, error: e.message };
   }
 });
 
 ipcMain.handle("fs:openFolder", async (_, dirPath) => {
-  shell.openPath(dirPath);
+  const safePath = await assertLibraryPath(dirPath, appConfig.downloadDir);
+  return shell.openPath(safePath);
 });
 
 // ──────────────────────────────────────────────────────────────────
 //  IPC — Context menus
 // ──────────────────────────────────────────────────────────────────
 
-ipcMain.handle("menu:seriesContext", (_, { seriesDir, seriesTitle }) => {
+ipcMain.handle("menu:seriesContext", async (_, { seriesDir, seriesTitle }) => {
+  seriesDir = await assertLibraryPath(seriesDir, appConfig.downloadDir);
   return new Promise((resolve) => {
     const template = [
       {
@@ -527,7 +533,8 @@ ipcMain.handle("menu:seriesContext", (_, { seriesDir, seriesTitle }) => {
   });
 });
 
-ipcMain.handle("menu:chapterContext", (_, { chapterDir, chapterNumber }) => {
+ipcMain.handle("menu:chapterContext", async (_, { chapterDir, chapterNumber }) => {
+  chapterDir = await assertLibraryPath(chapterDir, appConfig.downloadDir);
   return new Promise((resolve) => {
     const template = [
       {
