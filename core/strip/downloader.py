@@ -236,6 +236,15 @@ class ChapterProgress:
 ProgressCallback = Callable[[ChapterProgress], None]
 
 
+class ImageDownloadError(RuntimeError):
+    """Raised when an expected chapter image cannot be downloaded."""
+
+    def __init__(self, url: str, cause: str):
+        self.url = url
+        self.cause = cause
+        super().__init__(f"Failed to download image {url}: {cause}")
+
+
 # ─────────────────────────────────────────────────────────────────────
 #  Per-series file lock
 # ─────────────────────────────────────────────────────────────────────
@@ -518,6 +527,8 @@ def download_chapter(
         _, url, dest, expected_hash = args
         ok = _download_image(url, dest, headers, quality,
                              _on_rate_limited, expected_hash)
+        if not ok:
+            raise ImageDownloadError(url, "download failed after retries")
         if ok and verify:
             hashes[dest.name] = _sha256_file(dest)
         with done_lock:
