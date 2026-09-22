@@ -4,7 +4,7 @@ from pathlib import Path
 from unittest.mock import patch
 import threading
 
-from strip.downloader import ImageDownloadError, _do_download, download_chapter
+from strip.downloader import DownloadFailure, ImageDownloadError, _do_download, download_chapter, download_series
 from strip.parsers.base import ChapterInfo, SeriesInfo
 
 
@@ -91,3 +91,22 @@ class StreamingTests(unittest.TestCase):
 
         self.assertNotIn("discovery-continued-before-download", events)
         self.assertLess(events.index(("started", 1)), events.index("next-page"))
+
+
+class BusySeriesTests(unittest.TestCase):
+    def test_json_download_raises_when_series_lock_is_busy(self):
+        parser = type("Parser", (), {
+            "canonicalize_url": lambda self, url: url,
+            "get_series_info": lambda self, url: SeriesInfo("Series", "", "", "", url),
+        })()
+        with tempfile.TemporaryDirectory() as tmp, \
+             patch("strip.downloader.config.ensure_download_dir", return_value=Path(tmp)), \
+             patch("strip.downloader._try_load_cached_series_info", return_value=None), \
+             patch("strip.downloader.SeriesLock.acquire", return_value=False), \
+             patch("strip.downloader._emit") as emit:
+            with self.assertRaises(DownloadFailure):
+                download_series(parser, "url", json_progress=True)
+        self.assertTrue(any(
+            call.args[0].get("status") == "error"
+            for call in emit.call_args_list
+        ))

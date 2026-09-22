@@ -640,9 +640,10 @@ def download_series(
                f"by another stripdl process.  Lock: {lock._path}")
         if json_progress:
             _emit({"status": "error", "message": msg})
-        else:
-            raise RuntimeError(msg)
-        return series_dir
+            raise DownloadFailure(
+                [ChapterFailure(0, msg)], events_emitted=True, outcome="error",
+            )
+        raise RuntimeError(msg)
 
     try:
         return _do_download(
