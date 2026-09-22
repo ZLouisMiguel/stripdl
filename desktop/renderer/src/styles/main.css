@@ -1051,9 +1051,24 @@ select {
   background: rgba(39, 174, 96, 0.15);
   color: #27ae60;
 }
+.tray-job-status-badge.status-partial {
+  background: rgba(214, 137, 16, 0.14);
+  color: #a96b00;
+}
 .tray-job-status-badge.status-error {
   background: rgba(192, 57, 43, 0.12);
   color: var(--danger);
+}
+
+.tray-job-failure {
+  margin-top: 8px;
+  padding: 8px 10px;
+  border-left: 3px solid var(--danger);
+  border-radius: 4px;
+  background: rgba(192, 57, 43, 0.08);
+  color: var(--danger);
+  font-size: 12px;
+  line-height: 1.45;
 }
 .tray-job-status-badge.status-cancelled {
   background: var(--border);

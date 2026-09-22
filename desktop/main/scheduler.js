@@ -106,7 +106,7 @@ function startScheduler({ getSchedules, updateSchedule, runCheck }) {
           const result = await runCheck(seriesKey, entry);
           updateSchedule(seriesKey, {
             lastRun: dateStr,
-            lastResult: result.error ? "error" : "checked",
+            lastResult: result.partial ? "partial" : result.error ? "error" : "checked",
             lastDownloadedCount: result.downloaded || 0,
             lastError: result.error || null,
             lastCheckedAt: Date.now(),

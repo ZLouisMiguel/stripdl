@@ -21,6 +21,7 @@ const { spawn } = require("child_process");
 const { buildDownloadConfigArgs } = require("./configKeys");
 const { startScheduler } = require("./scheduler");
 const { assertLibraryPath } = require("./pathSafety.cjs");
+const { createLineDecoder, summarizeDownloadFailure } = require("./downloadOutput.cjs");
 
 const isDev =
   process.argv.includes("--dev") || !!process.env.ELECTRON_RENDERER_URL;
@@ -310,7 +311,7 @@ const activeDownloads = new Map();
 function spawnDownload({ url, chapters, downloadDir, extraArgs = [] }) {
   const args = ["download", url, "--json-progress"];
   if (chapters) args.push("--chapters", chapters);
-  if (downloadDir) args.push("--output", downloadDir);
+  args.push("--output", appConfig.downloadDir);
   args.push(...buildDownloadConfigArgs(appConfig));
   args.push(...extraArgs);
 
@@ -319,7 +320,9 @@ function spawnDownload({ url, chapters, downloadDir, extraArgs = [] }) {
 
   let downloadedCount = 0;
   let hadError = false;
+  let partial = false;
   let errorMessage = null;
+  let stderrTail = "";
 
   const send = (payload) => {
     if (mainWindow && !mainWindow.isDestroyed())
@@ -342,46 +345,59 @@ function spawnDownload({ url, chapters, downloadDir, extraArgs = [] }) {
 
     child.on("error", (e) => {
       hadError = true;
-      errorMessage = e.message;
-      send({ status: "error", message: e.message });
+      errorMessage = summarizeDownloadFailure({ status: "error", message: e.message }, "", 1);
+      send({ status: "error", message: e.message, failureMessage: errorMessage });
       activeDownloads.delete(downloadId);
-      resolve({ downloadedCount, hadError, errorMessage });
+      resolve({ downloadedCount, hadError, partial, errorMessage });
     });
 
-    child.stdout.on("data", (data) => {
-      for (const line of data.toString().split("\n").filter(Boolean)) {
+    const decodeLine = createLineDecoder((line) => {
         let parsed = null;
         try {
           parsed = JSON.parse(line);
         } catch (_) {
           send({ status: "log", message: line });
-          continue;
+          return;
+        }
+        if (!parsed || typeof parsed !== "object") {
+          send({ status: "log", message: line });
+          return;
         }
         if (parsed.status === "chapter_done") downloadedCount++;
-        if (
-          parsed.status === "error" &&
-          !parsed.chapter &&
-          !parsed.chapter_id
-        ) {
+        if (parsed.status === "chapter_error") {
+          partial = true;
           hadError = true;
-          errorMessage = parsed.message;
+          errorMessage = summarizeDownloadFailure(parsed, stderrTail, 1);
+          parsed.failureMessage = errorMessage;
+        } else if (parsed.status === "partial") {
+          partial = true;
+          hadError = true;
+          errorMessage = summarizeDownloadFailure(parsed, stderrTail, 1);
+          parsed.failureMessage = errorMessage;
+        } else if (parsed.status === "error") {
+          hadError = true;
+          errorMessage = summarizeDownloadFailure(parsed, stderrTail, 1);
+          parsed.failureMessage = errorMessage;
         }
         send(parsed);
-      }
     });
+    child.stdout.on("data", decodeLine);
 
     child.stderr.on("data", (data) => {
-      send({ status: "error", message: data.toString() });
+      const detail = data.toString();
+      stderrTail = (stderrTail + detail).slice(-8192);
+      send({ status: "diagnostic", message: detail });
     });
 
     child.on("close", (code) => {
+      decodeLine.end();
       activeDownloads.delete(downloadId);
-      send({ status: "process_exit", code });
       if (code !== 0 && !hadError) {
         hadError = true;
-        errorMessage = `stripdl exited with code ${code}`;
+        errorMessage = summarizeDownloadFailure(null, stderrTail, code);
       }
-      resolve({ downloadedCount, hadError, errorMessage });
+      send({ status: "process_exit", code, errorMessage });
+      resolve({ downloadedCount, hadError, partial, errorMessage });
     });
   });
 
@@ -457,6 +473,7 @@ function initScheduler() {
       return {
         downloaded: result.downloadedCount,
         error: result.hadError ? result.errorMessage : undefined,
+        partial: result.partial,
       };
     },
   });

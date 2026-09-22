@@ -28,7 +28,7 @@ export default function JobRow({ job, onCancel, onDismiss }) {
 
   const displayTitle =
     job.title || (job.url.length > 55 ? job.url.slice(0, 52) + "…" : job.url);
-  const finished = ["done", "error", "cancelled"].includes(job.status);
+  const finished = ["done", "partial", "error", "cancelled"].includes(job.status);
   const overallPct =
     job.status === "done"
       ? 100
@@ -92,6 +92,12 @@ export default function JobRow({ job, onCancel, onDismiss }) {
           <span className="tray-job-pct">{overallPct}%</span>
         </div>
       </div>
+
+      {job.failureMessage && (
+        <div className="tray-job-failure" role="alert">
+          {job.failureMessage}
+        </div>
+      )}
 
       {expanded && job.chapterOrder.length > 0 && (
         <div className="tray-chapters-list">
