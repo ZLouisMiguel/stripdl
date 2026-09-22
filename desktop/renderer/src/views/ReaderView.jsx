@@ -9,7 +9,11 @@ import React, { useCallback, useEffect, useRef, useState } from "react";
 import { useConfig } from "../hooks/useConfig.js";
 import { updateLastReadPosition } from "../lib/readingProgress.js";
 import { createProgressDebouncer } from "../lib/progressDebouncer.mjs";
-import { getVisiblePageIndex } from "../lib/readerWindow.mjs";
+import {
+  getVisiblePageIndex,
+  getReaderWindow,
+  getWindowSpacerHeights,
+} from "../lib/readerWindow.mjs";
 import { toFileUrl } from "../lib/fileUrl.js";
 
 function PageImage({ src, index, eager, loaded, wrapperRef }) {
@@ -58,6 +62,7 @@ export default function ReaderView({
   const [showEndOverlay, setShowEndOverlay] = useState(false);
   const [loadedSet, setLoadedSet] = useState(() => new Set());
   const [startPage, setStartPage] = useState(0);
+  const [pageHeights, setPageHeights] = useState([]);
 
   const containerRef = useRef(null);
   const pageRefs = useRef([]);
@@ -95,6 +100,7 @@ export default function ReaderView({
     setVisibleIndex(0);
     setShowEndOverlay(false);
     setLoadedSet(new Set());
+    setPageHeights([]);
     preloadTriggeredRef.current = false;
     pageRefs.current = [];
     intersectingPagesRef.current.clear();
@@ -120,7 +126,11 @@ export default function ReaderView({
           sp = 0;
         }
       }
-      if (!cancelled) setStartPage(sp);
+      const restoredPage = Math.max(0, Math.min(urls.length - 1, Number(sp) || 0));
+      if (!cancelled) {
+        setStartPage(restoredPage);
+        setVisibleIndex(restoredPage);
+      }
 
       if (!useLazy) {
         setLoadedSet(new Set(urls.map((_, i) => i)));
@@ -132,6 +142,11 @@ export default function ReaderView({
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [chapter?.directory]);
+
+  const readerWindow = getReaderWindow(pages.length, visibleIndex, 4);
+  const spacerHeights = getWindowSpacerHeights(
+    pageHeights, readerWindow.start, readerWindow.end,
+  );
 
   function preloadNextChapter() {
     if (!series || !chapter) return;
@@ -196,12 +211,35 @@ export default function ReaderView({
 
     return () => observer.disconnect();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pages, useLazy, preloadNext]);
+  }, [pages, useLazy, preloadNext, readerWindow.start, readerWindow.end]);
+
+  useEffect(() => {
+    if (!pages.length || typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver((entries) => {
+      setPageHeights((previous) => {
+        let next = previous;
+        for (const entry of entries) {
+          const index = Number(entry.target.dataset.pageIndex);
+          const height = entry.contentRect.height;
+          if (!Number.isFinite(index) || !Number.isFinite(height) || height <= 0) continue;
+          if (Math.abs((next[index] || 0) - height) < 1) continue;
+          if (next === previous) next = [...previous];
+          next[index] = height;
+        }
+        return next;
+      });
+    });
+    for (let index = readerWindow.start; index <= readerWindow.end; index++) {
+      const element = pageRefs.current[index];
+      if (element) observer.observe(element);
+    }
+    return () => observer.disconnect();
+  }, [pages.length, readerWindow.start, readerWindow.end]);
 
   useEffect(() => {
     if (!pages.length || startPage <= 0 || startPage >= pages.length) return;
     const t = setTimeout(() => {
-      pageRefs.current[startPage]?.scrollIntoView({ behavior: "smooth" });
+      pageRefs.current[startPage]?.scrollIntoView({ behavior: "auto" });
     }, 200);
     return () => clearTimeout(t);
   }, [pages, startPage]);
@@ -365,7 +403,10 @@ export default function ReaderView({
               No pages found in this chapter.
             </div>
           )}
-          {pages.map((src, i) => (
+          <div aria-hidden="true" style={{ height: spacerHeights.before }} />
+          {pages.slice(readerWindow.start, readerWindow.end + 1).map((src, offset) => {
+            const i = readerWindow.start + offset;
+            return (
             <PageImage
               key={i}
               src={src}
@@ -374,7 +415,9 @@ export default function ReaderView({
               loaded={loadedSet.has(i)}
               wrapperRef={(el) => (pageRefs.current[i] = el)}
             />
-          ))}
+            );
+          })}
+          <div aria-hidden="true" style={{ height: spacerHeights.after }} />
         </div>
       </div>
 
