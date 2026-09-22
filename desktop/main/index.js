@@ -23,6 +23,7 @@ const { startScheduler } = require("./scheduler");
 const { assertLibraryPath } = require("./pathSafety.cjs");
 const { createLineDecoder, summarizeDownloadFailure } = require("./downloadOutput.cjs");
 const { createProgressPersistence } = require("./progressPersistence.cjs");
+const { scanLibrary } = require("./libraryScanner.cjs");
 
 const isDev =
   process.argv.includes("--dev") || !!process.env.ELECTRON_RENDERER_URL;
@@ -233,59 +234,7 @@ ipcMain.handle("config:set", (_, updates) => {
 //  IPC — Library scanning
 // ──────────────────────────────────────────────────────────────────
 
-const CHAPTER_DIR_RE = /^(\d+)(?:_(\d))?$/;
-
-ipcMain.handle("library:scan", () => {
-  const root = appConfig.downloadDir;
-  if (!fs.existsSync(root)) return [];
-
-  const series = [];
-  for (const entry of fs.readdirSync(root, { withFileTypes: true })) {
-    if (!entry.isDirectory()) continue;
-    const seriesDir = path.join(root, entry.name);
-    const metaPath = path.join(seriesDir, "metadata.json");
-    if (!fs.existsSync(metaPath)) continue;
-
-    let meta = {};
-    try {
-      meta = JSON.parse(fs.readFileSync(metaPath, "utf8"));
-    } catch (_) {}
-
-    const coverPath = path.join(seriesDir, "cover.jpg");
-    const chapters = [];
-
-    for (const ch of fs.readdirSync(seriesDir, { withFileTypes: true })) {
-      if (!ch.isDirectory()) continue;
-      const m = CHAPTER_DIR_RE.exec(ch.name);
-      if (!m) continue;
-
-      const dirNumber =
-        parseInt(m[1], 10) + (m[2] ? parseInt(m[2], 10) / 10 : 0);
-      const chDir = path.join(seriesDir, ch.name);
-      const chMeta = path.join(chDir, "metadata.json");
-      let chData = {
-        number: dirNumber,
-        title: `Chapter ${dirNumber}`,
-      };
-      try {
-        chData = { ...chData, ...JSON.parse(fs.readFileSync(chMeta, "utf8")) };
-      } catch (_) {}
-      const pages = fs
-        .readdirSync(chDir)
-        .filter((f) => f.endsWith(".jpg") && f !== "cover.jpg").length;
-      chapters.push({ ...chData, directory: chDir, pageCount: pages });
-    }
-
-    chapters.sort((a, b) => a.number - b.number);
-    series.push({
-      ...meta,
-      directory: seriesDir,
-      coverPath: fs.existsSync(coverPath) ? coverPath : null,
-      chapters,
-    });
-  }
-  return series;
-});
+ipcMain.handle("library:scan", () => scanLibrary(appConfig.downloadDir));
 
 // ──────────────────────────────────────────────────────────────────
 //  IPC — Chapter pages
