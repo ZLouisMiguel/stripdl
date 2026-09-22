@@ -25,15 +25,13 @@ from rich.progress import (
 from rich import box
 
 from strip.config import config
+from strip import __version__
 from strip.parsers import get_parser
 from strip.parsers.base import ChapterInfo
 from strip.downloader import download_series, ChapterProgress, DownloadFailure
 from strip.library import scan_library
 
 console = Console()
-
-_VERSION = "0.3.1"
-
 
 def format_chapter_number(number: float) -> str:
     value = float(number)
@@ -45,7 +43,7 @@ def format_chapter_number(number: float) -> str:
 # ────────────────────────────────────────────────────────────────────
 
 @click.group()
-@click.version_option(_VERSION, prog_name="stripdl")
+@click.version_option(__version__, prog_name="stripdl")
 def cli():
     """
     \b

@@ -5,7 +5,7 @@ long_description = (Path(__file__).parent.parent / "README.md").read_text("utf-8
 
 setup(
     name="strip",
-    version="0.3.1",
+    version="0.3.2",
     description="Webtoon downloader and library manager",
     long_description=long_description,
     long_description_content_type="text/markdown",

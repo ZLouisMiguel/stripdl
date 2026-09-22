@@ -2,41 +2,11 @@
 #
 # What changed and why:
 #
-#   PROBLEM: _do_download() called parser.get_chapter_list() which blocked
-#            until every chapter-list page was fetched before a single
-#            download could start.  The CLI also pre-fetched the same list
-#            in _fetch_chapters_live, so every page was fetched twice.
-#
-#   FIX: _do_download() now runs a background "fetcher" thread that calls
-#        parser.iter_chapter_list() and streams ChapterInfo objects to the
-#        progress callback (status="chapter_found") as each page of the
-#        chapter list arrives — so the UI shows live discovery progress
-#        instead of a frozen spinner.  The chapter list is still fetched
-#        exactly ONCE (previously the CLI pre-fetched it a second time via
-#        _fetch_chapters_live).
-#
-#   NOTE (previously mis-documented): actual image downloading does NOT
-#        start until discovery finishes.  All discovered chapters are
-#        collected, sorted ascending by chapter number, and only THEN
-#        pushed onto the download queue.  This is deliberate, not an
-#        oversight — Webtoons returns chapters newest-first, and an
-#        earlier version of this code queued chapters in arrival order,
-#        which meant the newest episode downloaded first and broke the
-#        "resume always continues from chapter 1" guarantee (see
-#        CHANGELOG v0.3.0 "Sequential chapter downloads" and v0.3.1
-#        "Downloads were starting from the newest chapter"). Sorting
-#        before enqueueing preserves that guarantee, at the cost of true
-#        discovery/download pipelining: for a very long series, no image
-#        download begins until the entire chapter list has been fetched —
-#        only the chapter_found / fetch_done progress events are live
-#        during that window.
-#
-#   PROBLEM: download_series() was called by the CLI *after* the CLI already
-#            fetched the full list, meaning two full scans per run.
-#   FIX: The CLI's download command now calls download_series() directly
-#        without pre-fetching, relying on progress callbacks that fire for
-#        each discovered chapter (status="chapter_found") and when discovery
-#        is complete (status="fetch_done").  cli.py updated accordingly.
+#   PIPELINE: WebtoonsParser discovers the real terminal page, then yields
+#             chapters oldest-first. _do_download() submits each yielded
+#             chapter immediately to the download pool, so image work starts
+#             while the remaining list pages are still being read. The CLI
+#             calls download_series() directly, so the list is fetched once.
 #
 #   PROBLEM: Image downloads used bare requests.get() — no connection-level
 #            retry.  One dropped TCP connection = permanent failure.
@@ -600,16 +570,9 @@ def download_series(
     """
     Download a full series or filtered subset.
 
-    Discovery and downloading are NOT fully pipelined: the chapter-list
-    fetcher runs on a background thread and streams live "chapter_found"
-    progress events as pages arrive, but every discovered chapter is
-    collected, sorted ascending by chapter number, and only then pushed to
-    the download queue. This guarantees chapter 1 always downloads first on
-    resume (Webtoons returns chapters newest-first), at the cost of true
-    pipelining — see the module-level comment at the top of this file for
-    the history of why that trade-off is deliberate.
-
-    The chapter list is fetched exactly ONCE, even when called from the CLI.
+    The chapter list is fetched once on a background thread. Parser iterators
+    yield chapters in download order and each is submitted immediately, so
+    chapter discovery overlaps with image downloads.
     """
     _reset_bucket()
 
@@ -729,12 +692,8 @@ def _do_download(parser, url, series_info, series_dir,
 
     # ── Background fetcher → queue → download pool ────────────────────────────
     #
-    # The fetcher thread calls iter_chapter_list() (which yields one page at a
-    # time) and streams chapter_found progress events as each page arrives, so
-    # the progress bar stays live during discovery. It still collects every
-    # chapter and sorts ascending before any of them are pushed to ch_queue —
-    # see the download_series() docstring and the module header comment for
-    # why downloads intentionally wait for discovery to finish.
+    # The fetcher streams oldest-first chapters into the queue as they are
+    # discovered; download workers consume them concurrently.
 
     ch_queue    = queue.Queue(maxsize=500)
     fetch_error = [None]
@@ -749,10 +708,6 @@ def _do_download(parser, url, series_info, series_dir,
             else:
                 source = iter(parser.get_chapter_list(url))
 
-            # Collect the full chapter list first so we can sort before downloading.
-            # Webtoons returns newest-first; we must sort ascending so chapter 1
-            # downloads before chapter 210.  We still emit chapter_found events
-            # as each chapter arrives so the progress bar stays live during fetch.
             for ch in source:
                 total_found[0] += 1
                 if json_progress:

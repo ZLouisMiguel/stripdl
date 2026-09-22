@@ -30,6 +30,7 @@ strip/
 │ │ ├── base.py # SiteParser ABC, SeriesInfo, ChapterInfo
 │ │ ├── init.py # Parser registry (PARSERS list + get_parser())
 │ │ └── webtoons.py # Webtoons.com implementation
+│ ├── tests/ # unittest coverage for CLI, downloader, and parsers
 │ ├── requirements.txt
 │ └── setup.py
 ├── desktop/
@@ -37,10 +38,8 @@ strip/
 │ │ ├── index.js # Main process: IPC handlers, CLI subprocess
 │ │ ├── configKeys.js # Electron config key -> CLI flag mapping
 │ │ └── preload.js # contextBridge API exposed to renderer
-│ └── src/
-│ ├── index.html # App shell
-│ ├── js/app.js # All renderer logic (library, reader, tray, settings)
-│ └── css/main.css # All styles
+│ ├── renderer/src/ # React views, components, hooks, and styles
+│ └── test/ # Node built-in tests for main and renderer helpers
 └── build_cli.py # PyInstaller wrapper
 
 ---
@@ -67,17 +66,18 @@ stripdl --version
 ```bash
 cd desktop
 npm install
-npm start           # opens the app in development mode
-npm run dev         # same, with --dev flag for extra logging
+npm run dev         # opens the app with the Vite development server
+npm test            # runs the Electron/main-process helper tests
+npm run build       # verifies production main, preload, and renderer bundles
 ```
 
 **Node.js 18+ required.**
 
-The renderer has no build step — `index.html`, `app.js`, and `main.css` are loaded directly. Edit and reload the window (`Ctrl+R` / `Cmd+R`) to see changes.
+The renderer is built with React and electron-vite. Edit the files under `desktop/renderer/`; the development server reloads renderer changes automatically.
 
 ### Running the CLI against the live app
 
-The Electron app spawns `stripdl` from `PATH` during development (`npm start`) and from `resources/strip-cli/stripdl` in a packaged build. As long as you have `pip install -e .` active, `npm start` will pick up your local edits automatically.
+The Electron app spawns `stripdl` from `PATH` during development (`npm run dev`) and from `resources/strip-cli/stripdl` in a packaged build. With `pip install -e .` active, development runs pick up local CLI changes automatically.
 
 ---
 
@@ -104,7 +104,7 @@ The most impactful contribution. See [Adding a new site parser](#adding-a-new-si
 Good places to look:
 
 - UX improvements to the download tray or reader toolbar
-- Better error surfaces (the app currently shows raw CLI error strings in some cases)
+- Clear, actionable error summaries and diagnostics in the download tray
 - Keyboard shortcut gaps
 - Windows-specific path or styling issues
 
@@ -238,21 +238,15 @@ contextBridge.exposeInMainWorld('strip', {
 
 If your new IPC handler needs to spawn `stripdl download` with a new config-driven flag, add it to `DOWNLOAD_CONFIG_FLAGS` in `main/configKeys.js` rather than adding another `if (cfg.x) args.push(...)` line directly in `download:start`.
 
-### Renderer (`src/js/app.js`)
+### Renderer (`renderer/src/`)
 
-There is no bundler. `app.js` is a single vanilla JS file loaded directly by `index.html`. Keep it that way — no build step means anyone can open the file and read it without tooling.
-
-When adding UI:
-
-- Add the HTML structure to `index.html`
-- Add styles to `main.css`
-- Wire behaviour in `app.js`
+The renderer uses React and electron-vite. Keep UI in the existing view/component structure and styles in `renderer/src/styles/main.css`; run `npm run dev` for hot reload and `npm run build` to verify production bundles.
 
 The renderer communicates with the main process exclusively through `window.strip.*` (the contextBridge API defined in `preload.js`).
 
 ### Testing locally
 
-`npm start` opens the app in a normal Electron window. Open DevTools with `Ctrl+Shift+I` / `Cmd+Option+I`. Main process logs appear in the terminal; renderer logs appear in DevTools console.
+`npm run dev` opens the app in a normal Electron window. Open DevTools with `Ctrl+Shift+I` / `Cmd+Option+I`. Main process logs appear in the terminal; renderer logs appear in DevTools console.
 
 ---
 
@@ -268,8 +262,8 @@ The renderer communicates with the main process exclusively through `window.stri
 
 ### JavaScript
 
-- Vanilla ES2020 — no frameworks, no bundler.
-- DOM updates from background work go through `requestAnimationFrame` to batch repaints.
+- React/ES modules bundled with electron-vite; keep main-process helpers independently testable where practical.
+- High-frequency download updates are batched through `requestAnimationFrame`.
 - IPC channels are named `namespace:action` (e.g. `fs:deleteChapter`, `download:start`).
 - Add comments for anything non-obvious. The file is long — future readers will thank you.
 
@@ -292,8 +286,9 @@ See [Commit message format](#commit-message-format) below.
 2. Make your changes. Keep each commit focused on one thing.
 
 3. Test your changes:
-   - For parser changes: run a real download against the target site and verify the folder structure and image count are correct.
-   - For Electron changes: run `npm start` and test the affected flow manually.
+   - Core: run `python -m unittest discover -s tests -v` from `core`.
+   - Electron: run `npm test` and `npm run build` from `desktop`.
+   - For parser changes, also verify a real download against the target site when practical.
 
 4. Open a pull request against `main`. Describe what the change does and why, and include any relevant URLs or screenshots.
 
@@ -325,7 +320,7 @@ feat(cli): add --start / -s option to download from a specific chapter
 
 fix(webtoons): stop chapter-list pagination via dedup, not len < 10
 
-chore: bump version to 0.3.1
+chore: bump version to 0.3.2
 
 ---
 
