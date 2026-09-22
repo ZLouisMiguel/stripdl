@@ -8,6 +8,7 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { useConfig } from "../hooks/useConfig.js";
 import { updateLastReadPosition } from "../lib/readingProgress.js";
+import { createProgressDebouncer } from "../lib/progressDebouncer.mjs";
 import { toFileUrl } from "../lib/fileUrl.js";
 
 function PageImage({ src, index, eager, loaded, wrapperRef }) {
@@ -61,12 +62,25 @@ export default function ReaderView({
   const pageRefs = useRef([]);
   const observerRef = useRef(null);
   const preloadTriggeredRef = useRef(false);
-  const saveTimerRef = useRef(null);
+  const progressDebouncerRef = useRef(null);
+  if (!progressDebouncerRef.current) {
+    progressDebouncerRef.current = createProgressDebouncer((position) =>
+      updateLastReadPosition(
+        position.seriesTitle,
+        position.chapterNumber,
+        position.pageIndex,
+        position.totalPages,
+      ), 500);
+  }
 
   const useLazy = config?.lazyLoading !== false;
   const preloadNext = config?.preloadNextChapter !== false;
   const progressKey =
     series && chapter ? `${series.title}/${chapter.number}` : null;
+
+  useEffect(() => () => {
+    void progressDebouncerRef.current?.flush();
+  }, [progressKey]);
 
   useEffect(() => {
     let cancelled = false;
@@ -191,12 +205,14 @@ export default function ReaderView({
     });
     setVisibleIndex(idx);
 
-    clearTimeout(saveTimerRef.current);
-    saveTimerRef.current = setTimeout(() => {
-      if (!progressKey) return;
-      window.strip.progress.set(progressKey, idx);
-      updateLastReadPosition(series.title, chapter.number, idx, pages.length);
-    }, 500);
+    if (progressKey) {
+      progressDebouncerRef.current.schedule({
+        seriesTitle: series.title,
+        chapterNumber: chapter.number,
+        pageIndex: idx,
+        totalPages: pages.length,
+      });
+    }
 
     const distFromBottom =
       container.scrollHeight - container.scrollTop - container.clientHeight;

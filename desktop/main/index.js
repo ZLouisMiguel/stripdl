@@ -22,6 +22,7 @@ const { buildDownloadConfigArgs } = require("./configKeys");
 const { startScheduler } = require("./scheduler");
 const { assertLibraryPath } = require("./pathSafety.cjs");
 const { createLineDecoder, summarizeDownloadFailure } = require("./downloadOutput.cjs");
+const { createProgressPersistence } = require("./progressPersistence.cjs");
 
 const isDev =
   process.argv.includes("--dev") || !!process.env.ELECTRON_RENDERER_URL;
@@ -124,6 +125,24 @@ function saveConfig(cfg) {
 let appConfig = loadConfig();
 if (!appConfig.schedules) appConfig.schedules = {};
 
+async function writeConfigAtomic(nextConfig) {
+  const tempPath = `${CONFIG_PATH}.${process.pid}.${Date.now()}.tmp`;
+  try {
+    await fs.promises.writeFile(tempPath, JSON.stringify(nextConfig, null, 2), "utf8");
+    await fs.promises.rename(tempPath, CONFIG_PATH);
+    appConfig = nextConfig;
+  } catch (error) {
+    await fs.promises.rm(tempPath, { force: true }).catch(() => {});
+    throw error;
+  }
+}
+
+const progressPersistence = createProgressPersistence({
+  getConfig: () => appConfig,
+  writeConfigAtomic,
+});
+let allowQuitAfterProgressFlush = false;
+
 // ──────────────────────────────────────────────────────────────────
 //  Window management
 // ──────────────────────────────────────────────────────────────────
@@ -171,8 +190,14 @@ app.on("window-all-closed", () => {
   if (process.platform !== "darwin") app.quit();
 });
 
-app.on("before-quit", () => {
+app.on("before-quit", (event) => {
   if (scheduler) scheduler.stop();
+  if (allowQuitAfterProgressFlush) return;
+  event.preventDefault();
+  progressPersistence.flush().finally(() => {
+    allowQuitAfterProgressFlush = true;
+    app.quit();
+  });
 });
 
 // ──────────────────────────────────────────────────────────────────
@@ -295,12 +320,9 @@ ipcMain.handle(
   (_, key) => appConfig.readingProgress?.[key] ?? null,
 );
 
-ipcMain.handle("progress:set", (_, key, pageIndex) => {
-  if (!appConfig.readingProgress) appConfig.readingProgress = {};
-  appConfig.readingProgress[key] = pageIndex;
-  saveConfig(appConfig);
-  return true;
-});
+ipcMain.handle("progress:savePosition", (_, position) =>
+  progressPersistence.saveReadingPosition(position),
+);
 
 // ──────────────────────────────────────────────────────────────────
 //  IPC — Downloads
