@@ -39,13 +39,12 @@ export async function updateLastReadPosition(
   totalPages,
 ) {
   try {
-    await window.strip.progress.set(`${seriesTitle}/lastRead`, {
+    await window.strip.progress.savePosition({
+      seriesTitle,
       chapterNumber,
       pageIndex,
       totalPages,
-      timestamp: Date.now(),
     });
-    await window.strip.progress.set(`${seriesTitle}/recentlyRead`, Date.now());
   } catch (e) {
     console.error("Failed to update reading position:", e);
   }

@@ -81,15 +81,11 @@ export default function SeriesDetailView({
 
     if (action === "mark_read") {
       const lastPage = (chapter.pageCount || 1) - 1;
-      await window.strip.progress.set(
-        `${series.title}/${chapter.number}`,
-        lastPage,
-      );
       await updateLastReadPosition(
         series.title,
         chapter.number,
         lastPage,
-        chapter.pageCount,
+        chapter.pageCount || 0,
       );
       setChapterProgress((prev) => ({ ...prev, [chapter.number]: lastPage }));
       showToast(`Ch.${chapter.number} marked as read.`, "success");

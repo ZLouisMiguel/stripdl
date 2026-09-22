@@ -19,7 +19,7 @@ contextBridge.exposeInMainWorld("strip", {
 
   progress: {
     get: (key) => ipcRenderer.invoke("progress:get", key),
-    set: (key, pageIndex) => ipcRenderer.invoke("progress:set", key, pageIndex),
+    savePosition: (position) => ipcRenderer.invoke("progress:savePosition", position),
   },
 
   download: {
