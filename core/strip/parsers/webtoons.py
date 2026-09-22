@@ -262,68 +262,62 @@ class WebtoonsParser(SiteParser):
 
     def iter_chapter_list(self, url: str) -> Iterator[ChapterInfo]:
         """
-        Yield ChapterInfo objects as each page arrives.
-        Pages are fetched in parallel batches of _CONCURRENT_PAGES.
-        Yields in site order (newest chapters first on Webtoons).
-
-        Termination is judged ENTIRELY by deduplication: Webtoons echoes the
-        last real page for any out-of-range page request instead of returning
-        empty results, so as soon as a page yields zero chapters we haven't
-        already seen, we've walked off the end of the list and can stop.
-
-        Deliberately NOT judged by a fixed "chapters per page" threshold
-        (previously len(items) < 10, and briefly a raw-item-count variant of
-        the same idea): the real page size is a Webtoons implementation
-        detail this project doesn't control, and it has changed — observed
-        to be 9 as of this writing, not the 10 this code used to assume.
-        Hardcoding any specific number made every page look like a
-        short/last page and stopped pagination after page 1 for every
-        multi-page series, silently dropping every earlier chapter. Dedup
-        alone is page-size-agnostic and self-correcting no matter what
-        number Webtoons uses today or changes to next.
+        Discover the terminal page with exponential probes and binary search,
+        then yield chapters oldest-first. Webtoons echoes its last page for
+        out-of-range requests, so the echoed chapter identity sequence marks
+        the boundary without assuming a fixed page size.
         """
-        seen: set = set()
+        def identity(items):
+            return tuple((item.number, item.url) for item in items)
 
-        # Page 1 serial — establishes whether the series has any chapters at all
-        p1 = self._fetch_page_with_retry(url, 1)
-        new_on_p1 = []
-        for ch in p1:
-            if ch.number not in seen:
-                seen.add(ch.number)
-                new_on_p1.append(ch)
-        yield from new_on_p1
+        first = self._fetch_page_with_retry(url, 1)
+        if not first:
+            return
 
-        if not new_on_p1:
-            return  # empty series, or page 1 is already an echo of nothing
+        second = self._fetch_page_with_retry(url, 2)
+        terminal_identity = identity(first)
+        if identity(second) == terminal_identity:
+            terminal_page = 1
+        else:
+            before_previous_page = 1
+            previous_page = 2
+            previous_identity = identity(second)
+            probe_page = 4
+            bracket = None
 
-        # Remaining pages — parallel batches, yielded in page order
-        next_page = 2
-        with ThreadPoolExecutor(max_workers=_CONCURRENT_PAGES) as pool:
-            while True:
-                batch = list(range(next_page, next_page + _CONCURRENT_PAGES))
-                next_page += _CONCURRENT_PAGES
-
-                futures = {pool.submit(self._fetch_page_with_retry, url, p): p
-                           for p in batch}
-                results = {}
-                for fut in as_completed(futures):
-                    p = futures[fut]
-                    results[p] = fut.result()
-
-                done = False
-                for p in sorted(results):
-                    items = results[p]
-                    new_items = [ch for ch in items if ch.number not in seen]
-                    for ch in new_items:
-                        seen.add(ch.number)
-                    yield from new_items
-                    # Stop as soon as a page has nothing new — the
-                    # page-size-agnostic signal that we've reached the end.
-                    if not new_items:
-                        done = True
-                        break
-                if done:
+            for _ in range(64):
+                probed = self._fetch_page_with_retry(url, probe_page)
+                probed_identity = identity(probed)
+                if probed_identity == previous_identity:
+                    terminal_identity = probed_identity
+                    bracket = (before_previous_page, previous_page)
                     break
+                before_previous_page, previous_page = previous_page, probe_page
+                previous_identity = probed_identity
+                probe_page *= 2
+
+            if bracket is None:
+                raise ChapterListError(
+                    probe_page, RuntimeError("could not identify a repeated terminal page"))
+
+            low, high = bracket
+            while high - low > 1:
+                middle = (low + high) // 2
+                items = self._fetch_page_with_retry(url, middle)
+                if identity(items) == terminal_identity:
+                    high = middle
+                else:
+                    low = middle
+            terminal_page = high
+
+        seen = set()
+        for page in range(terminal_page, 0, -1):
+            items = self._fetch_page_with_retry(url, page)
+            for chapter in reversed(items):
+                key = (chapter.number, chapter.url)
+                if key not in seen:
+                    seen.add(key)
+                    yield chapter
 
     def get_chapter_list(self, url: str) -> List[ChapterInfo]:
         """Blocking — collects all chapters then sorts ascending by episode number."""

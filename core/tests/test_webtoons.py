@@ -25,3 +25,28 @@ class PaginationFailureTests(unittest.TestCase):
              patch("strip.parsers.webtoons.time.sleep"):
             with self.assertRaisesRegex(ChapterListError, "2"):
                 parser._fetch_page_with_retry(URL, 2)
+
+
+def ch(number):
+    return ChapterInfo(
+        number, f"Episode {number}",
+        f"https://www.webtoons.com/viewer?episode_no={number}",
+    )
+
+
+class OrderedIteratorTests(unittest.TestCase):
+    def test_variable_pages_yield_each_chapter_once_oldest_first(self):
+        pages = {1: [ch(5), ch(4)], 2: [ch(3), ch(2)], 3: [ch(1)]}
+        parser = WebtoonsParser()
+        with patch.object(
+            parser, "_fetch_chapter_page",
+            side_effect=lambda _url, page: pages.get(page, pages[3]),
+        ):
+            numbers = [chapter.number for chapter in parser.iter_chapter_list(URL)]
+        self.assertEqual(numbers, [1, 2, 3, 4, 5])
+        self.assertEqual(len(numbers), len(set(numbers)))
+
+    def test_empty_series_yields_nothing(self):
+        parser = WebtoonsParser()
+        with patch.object(parser, "_fetch_chapter_page", return_value=[]):
+            self.assertEqual(list(parser.iter_chapter_list(URL)), [])
