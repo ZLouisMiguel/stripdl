@@ -20,7 +20,7 @@ const { pathToFileURL } = require("url");
 const { spawn } = require("child_process");
 const { buildDownloadConfigArgs } = require("./configKeys");
 const { startScheduler } = require("./scheduler");
-const { assertLibraryPath } = require("./pathSafety.cjs");
+const { assertLibraryPath, assertSeriesPath, assertChapterPath } = require("./pathSafety.cjs");
 const { createLineDecoder, summarizeDownloadFailure } = require("./downloadOutput.cjs");
 const { createProgressPersistence } = require("./progressPersistence.cjs");
 const { scanLibrary } = require("./libraryScanner.cjs");
@@ -77,12 +77,13 @@ function registerStripFileProtocol() {
       // exact original path string (backslashes, drive letter, spaces,
       // unicode, all intact), no reconstruction needed.
       const filePath = decodeURIComponent(url.pathname.slice(1));
+      const safeFilePath = await assertLibraryPath(filePath, appConfig.downloadDir);
       // Awaited (not just returned) so a fetch failure — e.g. the file
       // genuinely doesn't exist — is caught here and turned into a
       // readable error response, instead of becoming an unhandled
       // promise rejection that surfaces to the renderer as an opaque
       // net::ERR_UNEXPECTED with no diagnostic information.
-      return await net.fetch(pathToFileURL(filePath).toString());
+      return await net.fetch(pathToFileURL(safeFilePath).toString());
     } catch (e) {
       return new Response(`strip-file protocol error: ${e.message}`, {
         status: 404,
@@ -241,7 +242,7 @@ ipcMain.handle("library:scan", () => scanLibrary(appConfig.downloadDir));
 // ──────────────────────────────────────────────────────────────────
 
 ipcMain.handle("chapter:pages", async (_, chapterDir) => {
-  const safeChapterDir = await assertLibraryPath(chapterDir, appConfig.downloadDir);
+  const safeChapterDir = await assertChapterPath(chapterDir, appConfig.downloadDir);
   const names = await fs.promises.readdir(safeChapterDir);
   const pages = [];
   for (const name of names.filter((f) => f.endsWith(".jpg") && !f.startsWith("cover")).sort()) {
@@ -472,7 +473,7 @@ ipcMain.handle("schedule:runNow", async () => {
 
 ipcMain.handle("fs:deleteSeries", async (_, seriesDir) => {
   try {
-    const safePath = await assertLibraryPath(seriesDir, appConfig.downloadDir);
+    const safePath = await assertSeriesPath(seriesDir, appConfig.downloadDir);
     await fs.promises.rm(safePath, { recursive: true, force: true });
     return { success: true, directory: safePath };
   } catch (e) {
@@ -482,7 +483,7 @@ ipcMain.handle("fs:deleteSeries", async (_, seriesDir) => {
 
 ipcMain.handle("fs:deleteChapter", async (_, chapterDir) => {
   try {
-    const safePath = await assertLibraryPath(chapterDir, appConfig.downloadDir);
+    const safePath = await assertChapterPath(chapterDir, appConfig.downloadDir);
     await fs.promises.rm(safePath, { recursive: true, force: true });
     return { success: true, directory: safePath };
   } catch (e) {
