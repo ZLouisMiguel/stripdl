@@ -27,7 +27,7 @@ from rich import box
 from strip.config import config
 from strip.parsers import get_parser
 from strip.parsers.base import ChapterInfo
-from strip.downloader import download_series, ChapterProgress
+from strip.downloader import download_series, ChapterProgress, DownloadFailure
 from strip.library import scan_library
 
 console = Console()
@@ -206,6 +206,22 @@ def download(
                             chapter_range=chapter_range,
                             specific_chapters=specific_chapters,
                             json_progress=True)
+        except DownloadFailure as e:
+            if not e.events_emitted:
+                for failure in e.failures:
+                    print(json.dumps({
+                        "status": "chapter_error", "chapter": failure.number,
+                        "message": failure.message,
+                    }), flush=True)
+            print(json.dumps({
+                "status": e.outcome,
+                "message": str(e),
+                "failures": [
+                    {"chapter": failure.number, "message": failure.message}
+                    for failure in e.failures
+                ],
+            }), flush=True)
+            sys.exit(1)
         except RuntimeError as e:
             print(json.dumps({"status": "error", "message": str(e)}), flush=True)
             sys.exit(1)

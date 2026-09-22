@@ -245,6 +245,25 @@ class ImageDownloadError(RuntimeError):
         super().__init__(f"Failed to download image {url}: {cause}")
 
 
+@dataclass
+class ChapterFailure:
+    number: float
+    message: str
+
+
+class DownloadFailure(RuntimeError):
+    """A download run that completed with one or more failed chapters."""
+
+    def __init__(self, failures, events_emitted=False, outcome="error"):
+        self.failures = list(failures)
+        self.events_emitted = events_emitted
+        self.outcome = outcome
+        super().__init__("; ".join(
+            f"Chapter {failure.number:g}: {failure.message}"
+            for failure in self.failures
+        ))
+
+
 # ─────────────────────────────────────────────────────────────────────
 #  Per-series file lock
 # ─────────────────────────────────────────────────────────────────────
@@ -759,6 +778,8 @@ def _do_download(parser, url, series_info, series_dir,
 
     max_ch = max(1, config.get("max_concurrent_chapters", 3))
     submitted: Dict = {}
+    failures = []
+    successful_chapters = 0
 
     with ThreadPoolExecutor(max_workers=max_ch) as pool:
         while True:
@@ -785,6 +806,7 @@ def _do_download(parser, url, series_info, series_dir,
                 if progress_cb:
                     progress_cb(ChapterProgress(
                         ch.number, ch.title, existing, existing, status="skipped"))
+                successful_chapters += 1
                 continue
 
             fut = pool.submit(
@@ -801,9 +823,12 @@ def _do_download(parser, url, series_info, series_dir,
             ch = submitted[fut]
             try:
                 fut.result()
+                successful_chapters += 1
             except Exception as exc:
+                failure = ChapterFailure(ch.number, str(exc))
+                failures.append(failure)
                 if json_progress:
-                    _emit({"status": "error", "chapter": ch.number,
+                    _emit({"status": "chapter_error", "chapter": ch.number,
                            "chapter_id": ch.number, "message": str(exc)})
                 if progress_cb:
                     progress_cb(ChapterProgress(
@@ -815,10 +840,16 @@ def _do_download(parser, url, series_info, series_dir,
             0, "", total_found[0], total_found[0], status="fetch_done"))
 
     if fetch_error[0]:
+        failures.append(ChapterFailure(0, f"Chapter list error: {fetch_error[0]}"))
         if json_progress:
-            _emit({"status": "error",
+            _emit({"status": "chapter_error", "chapter": 0,
                    "message": f"Chapter list error: {fetch_error[0]}"})
-        # Don't abort — partial download is still saved
+
+    if failures:
+        raise DownloadFailure(
+            failures, events_emitted=json_progress,
+            outcome="partial" if successful_chapters else "error",
+        )
 
     if json_progress:
         _emit({"status": "chapter_list", "total": total_found[0]})
