@@ -1,7 +1,7 @@
 {
   "name": "strip-reader",
   "author": "ZLouisMiguel on github",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "description": "Webtoon reader powered by strip",
   "main": "out/main/index.js",
   "scripts": {

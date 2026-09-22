@@ -14,7 +14,7 @@ Webtoon downloader & library manager — v2.
   <img src="https://skillicons.dev/icons?i=python,electron,js,html,css,nodejs" />
 </p>
 
-`v0.3.1` &nbsp;·&nbsp; MIT &nbsp;·&nbsp; Windows · macOS · Linux
+`v0.3.2` &nbsp;·&nbsp; MIT &nbsp;·&nbsp; Windows · macOS · Linux
 
 </div>
 
@@ -109,19 +109,9 @@ npm run dev
 
 ### Download pipeline
 
-The CLI fetches the chapter list and downloads images concurrently in a pipeline — chapter 1 starts downloading as soon as the first page of the chapter list arrives, without waiting for the full list:
+Webtoons chapter discovery probes for the actual terminal page (without assuming a fixed page size), then yields chapters oldest-first. The downloader queues each chapter as it is yielded, so image downloads begin while the remaining chapter pages are being read. Chapters and their images can download concurrently, while preserving oldest-first submission order.
 
-background thread download pool (3 workers)
-───────────────── ─────────────────────────
-iter_chapter_list()
-page 1 fetched ──► sort ascending ──► chapter 1 starts
-page 2 fetched ──► push to queue ──► chapter 2 starts
-page 3 fetched ──► push to queue ──► chapter 3 starts
-...
-
-Within each chapter, images are downloaded concurrently (4 threads by default) through a shared session with automatic connection retry and exponential backoff.
-
-> **Note:** discovery and downloading are not fully pipelined in the current implementation — every chapter is discovered and sorted ascending by chapter number _before_ any of them are queued for download, so that resuming a series always restarts from chapter 1 rather than whatever chapter Webtoons happens to list first (Webtoons returns chapters newest-first). The diagram above describes the intended/target architecture; see the comment block at the top of `core/strip/downloader.py` for the current behavior and the trade-off involved.
+Within each chapter, images are downloaded concurrently (4 threads by default) through a shared session with automatic connection retry and exponential backoff. A chapter is marked complete only after every expected image succeeds. Pagination failures and failed chapters are surfaced as errors, and the CLI exits nonzero for incomplete runs.
 
 ### Resume
 
@@ -145,6 +135,8 @@ JSON event stream (subset):
 {"status": "chapter_done",  "chapter": 1, "pages_saved": 64}
 {"status": "done",          "series": "Tower of God", "directory": "..."}
 ```
+
+Failed chapters emit `chapter_error` followed by a terminal `partial` or `error` event; successful runs end with `done`. The Electron tray keeps these outcomes distinct and shows the chapter, cause, and retry guidance. Ordinary stderr diagnostics are retained as detail without turning a successful exit into a failure.
 
 ### Local image access
 
@@ -173,8 +165,8 @@ stripdl download [OPTIONS] URL
 
 | Option                    | Short | Description                                                    |
 | ------------------------- | ----- | -------------------------------------------------------------- |
-| `--chapters RANGE`        | `-c`  | Range `1-20` or comma list `1,3,5`                             |
-| `--start N`               | `-s`  | Download from chapter N through the latest                     |
+| `--chapters RANGE`        | `-c`  | Range `1-20` or comma list `1,3,5` (fractional values supported) |
+| `--start N`               | `-s`  | Download from chapter N (including fractional chapters) onwards |
 | `--output PATH`           | `-o`  | Override download directory for this run                       |
 | `--chapter-concurrency N` |       | Parallel chapters (default: 3)                                 |
 | `--image-concurrency N`   |       | Parallel images per chapter (default: 4)                       |
@@ -229,7 +221,20 @@ class MySiteParser(SiteParser):
     def get_image_headers(self) -> dict: ...
 ```
 
-Optionally add `iter_chapter_list(url)` as a generator that yields `ChapterInfo` objects one page at a time. The downloader uses it to pipeline list fetching with downloading. Falls back to `get_chapter_list` if not implemented.
+Optionally add `iter_chapter_list(url)` as a generator that yields chapters in download order. The downloader submits each yielded chapter immediately while discovery continues. Falls back to `get_chapter_list` if not implemented.
+
+## Tests
+
+```bash
+cd core
+python -m unittest discover -s tests -v
+
+cd ../desktop
+npm test
+npm run build
+```
+
+`npm run build` builds the Electron main process, preload, and React renderer bundles for production.
 
 ## Building a distributable
 

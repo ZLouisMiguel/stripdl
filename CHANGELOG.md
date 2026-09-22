@@ -4,7 +4,7 @@ All notable changes to this project are documented here.
 
 ## [Unreleased]
 
-Desktop app rewrite: the renderer (`desktop/src/`) has been replaced with an Electron + React + Vite application (`desktop/renderer/`), built via [electron-vite](https://electron-vite.org/). The Python CLI, main-process IPC contract (`window.strip.*`), and on-disk folder structure are all unchanged — this is a renderer-only rewrite.
+Desktop app rewrite: the renderer now uses React + Vite under `desktop/renderer/`, built via [electron-vite](https://electron-vite.org/). The Python CLI and on-disk folder structure remain unchanged; the `window.strip.*` IPC surface has gained guarded file operations and atomic progress persistence.
 
 - **feat:** Library, Series detail, Reader, Settings, and the Download tray are now React components/views instead of hand-written HTML + vanilla JS, backed by dedicated hooks and context providers (`useLibrary`, `useConfig`, `DownloadTrayContext`, `ToastContext`, `ConfirmContext`).
 - **feat:** Per-series auto-download scheduling (subscribe a series to specific weekdays; a background check downloads new chapters automatically while the app is open, with native OS notifications and in-app toasts) — see `desktop/main/scheduler.js`.
@@ -12,6 +12,15 @@ Desktop app rewrite: the renderer (`desktop/src/`) has been replaced with an Ele
 - **fix:** The app would intermittently freeze ("Not Responding") during active downloads. Root cause: every raw per-page download-progress event triggered an immediate, synchronous React re-render across the whole app; progress events are now buffered and flushed in a single batched update per animation frame, and per-job log/chapter tracking state is capped so long downloads of large series don't grow unboundedly.
 - **fix:** An unhandled `'error'` event on the spawned `stripdl` child process would have crashed the entire main process if the CLI were ever missing from `PATH` (or the bundled binary missing in a packaged build); now caught and reported through the normal progress/notification channels.
 - **fix:** Queued downloads (when `max_concurrent_jobs` is reached) now correctly replace their "queued" placeholder card with the real job card once a slot frees up, instead of leaving an orphaned duplicate card behind.
+
+## v0.3.2
+
+- **fix:** Failed chapter images and chapter-list pages no longer produce false completion or silently truncate a series; incomplete CLI runs report chapter errors and exit nonzero.
+- **fix:** Webtoons pagination now retries errors, discovers variable-sized terminal pages without a page-size assumption, and streams chapters oldest-first.
+- **fix:** Fractional chapter selection and display preserve values such as `12.5`; Webtoons parser selection validates the actual HTTPS hostname.
+- **fix:** Electron IPC constrains file access to the configured library, including symlink resolution; download errors now retain stdout event boundaries and show actionable summaries.
+- **perf:** Reading progress is coalesced into asynchronous atomic writes; reader page tracking is observer-driven and long chapters mount only nearby pages; library scans no longer block the Electron main process.
+- **chore:** Align Python CLI/package and Electron app versions at `0.3.2`.
 
 ## v0.3.1
 
