@@ -46,6 +46,7 @@
 
 import re
 import threading
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Iterator, List
 from urllib.parse import urlparse, parse_qs, urlencode, urlunparse
@@ -75,6 +76,16 @@ _TIMEOUT = (10, 45)
 
 # Parallel page fetches when scanning a multi-page chapter list.
 _CONCURRENT_PAGES = 3
+_PAGE_FETCH_ATTEMPTS = 3
+
+
+class ChapterListError(RuntimeError):
+    """Raised when a chapter-list page cannot be fetched reliably."""
+
+    def __init__(self, page: int, cause: Exception):
+        self.page = page
+        self.cause = str(cause)
+        super().__init__(f"Failed to fetch chapter-list page {page}: {cause}")
 
 # ── Shared session: connection pooling + automatic retry ─────────────────────
 #
@@ -237,6 +248,18 @@ class WebtoonsParser(SiteParser):
         list_url = _normalize_url(url)
         return _parse_items(_soup(_page_url(list_url, page)))
 
+    def _fetch_page_with_retry(self, url: str, page: int) -> List[ChapterInfo]:
+        """Retry transient page errors; never turn a failed page into an end marker."""
+        last_error = None
+        for attempt in range(_PAGE_FETCH_ATTEMPTS):
+            try:
+                return self._fetch_chapter_page(url, page)
+            except Exception as exc:
+                last_error = exc
+                if attempt + 1 < _PAGE_FETCH_ATTEMPTS:
+                    time.sleep(0.5 * (2 ** attempt))
+        raise ChapterListError(page, last_error) from last_error
+
     def iter_chapter_list(self, url: str) -> Iterator[ChapterInfo]:
         """
         Yield ChapterInfo objects as each page arrives.
@@ -262,7 +285,7 @@ class WebtoonsParser(SiteParser):
         seen: set = set()
 
         # Page 1 serial — establishes whether the series has any chapters at all
-        p1 = self._fetch_chapter_page(url, 1)
+        p1 = self._fetch_page_with_retry(url, 1)
         new_on_p1 = []
         for ch in p1:
             if ch.number not in seen:
@@ -280,15 +303,12 @@ class WebtoonsParser(SiteParser):
                 batch = list(range(next_page, next_page + _CONCURRENT_PAGES))
                 next_page += _CONCURRENT_PAGES
 
-                futures = {pool.submit(self._fetch_chapter_page, url, p): p
+                futures = {pool.submit(self._fetch_page_with_retry, url, p): p
                            for p in batch}
                 results = {}
                 for fut in as_completed(futures):
                     p = futures[fut]
-                    try:
-                        results[p] = fut.result()
-                    except Exception:
-                        results[p] = []
+                    results[p] = fut.result()
 
                 done = False
                 for p in sorted(results):
