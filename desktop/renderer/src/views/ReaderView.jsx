@@ -9,6 +9,7 @@ import React, { useCallback, useEffect, useRef, useState } from "react";
 import { useConfig } from "../hooks/useConfig.js";
 import { updateLastReadPosition } from "../lib/readingProgress.js";
 import { createProgressDebouncer } from "../lib/progressDebouncer.mjs";
+import { getVisiblePageIndex } from "../lib/readerWindow.mjs";
 import { toFileUrl } from "../lib/fileUrl.js";
 
 function PageImage({ src, index, eager, loaded, wrapperRef }) {
@@ -61,6 +62,9 @@ export default function ReaderView({
   const containerRef = useRef(null);
   const pageRefs = useRef([]);
   const observerRef = useRef(null);
+  const intersectingPagesRef = useRef(new Map());
+  const visibleIndexRef = useRef(visibleIndex);
+  visibleIndexRef.current = visibleIndex;
   const preloadTriggeredRef = useRef(false);
   const progressDebouncerRef = useRef(null);
   if (!progressDebouncerRef.current) {
@@ -93,6 +97,7 @@ export default function ReaderView({
     setLoadedSet(new Set());
     preloadTriggeredRef.current = false;
     pageRefs.current = [];
+    intersectingPagesRef.current.clear();
 
     (async () => {
       let filePaths = [];
@@ -151,8 +156,15 @@ export default function ReaderView({
     const observer = new IntersectionObserver(
       (entries) => {
         entries.forEach((entry) => {
-          if (!entry.isIntersecting) return;
           const idx = Number(entry.target.dataset.pageIndex);
+          if (!entry.isIntersecting) {
+            intersectingPagesRef.current.delete(idx);
+            return;
+          }
+          intersectingPagesRef.current.set(idx, {
+            index: idx,
+            top: entry.boundingClientRect.top - (entry.rootBounds?.top || 0),
+          });
 
           if (useLazy) {
             setLoadedSet((prev) => {
@@ -163,8 +175,6 @@ export default function ReaderView({
             });
           }
 
-          setVisibleIndex((prev) => (idx > prev ? idx : prev));
-
           if (
             preloadNext &&
             !preloadTriggeredRef.current &&
@@ -174,8 +184,11 @@ export default function ReaderView({
             preloadNextChapter();
           }
         });
+        setVisibleIndex(getVisiblePageIndex(
+          [...intersectingPagesRef.current.values()], visibleIndexRef.current,
+        ));
       },
-      { rootMargin: "500px 0px", threshold: 0 },
+      { root: containerRef.current, rootMargin: "500px 0px", threshold: 0 },
     );
 
     pageRefs.current.forEach((el) => el && observer.observe(el));
@@ -197,19 +210,11 @@ export default function ReaderView({
     const container = containerRef.current;
     if (!container) return;
 
-    let idx = 0;
-    pageRefs.current.forEach((el, i) => {
-      if (!el) return;
-      const rect = el.getBoundingClientRect();
-      if (rect.top < window.innerHeight / 2 && rect.bottom > 0) idx = i;
-    });
-    setVisibleIndex(idx);
-
     if (progressKey) {
       progressDebouncerRef.current.schedule({
         seriesTitle: series.title,
         chapterNumber: chapter.number,
-        pageIndex: idx,
+        pageIndex: visibleIndex,
         totalPages: pages.length,
       });
     }
@@ -221,7 +226,7 @@ export default function ReaderView({
       if (prev && distFromBottom > 180) return false;
       return prev;
     });
-  }, [progressKey, series, chapter, pages.length]);
+  }, [progressKey, series, chapter, pages.length, visibleIndex]);
 
   useEffect(() => {
     const container = containerRef.current;
