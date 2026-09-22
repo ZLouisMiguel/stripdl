@@ -49,7 +49,7 @@ import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Iterator, List
-from urllib.parse import urlparse, parse_qs, urlencode, urlunparse
+from urllib.parse import urlparse, urlsplit, parse_qs, urlencode, urlunparse
 
 import requests
 from requests.adapters import HTTPAdapter
@@ -198,7 +198,20 @@ class WebtoonsParser(SiteParser):
 
     @classmethod
     def supports(cls, url: str) -> bool:
-        return "webtoons.com" in url
+        try:
+            parsed = urlsplit(url)
+            host = parsed.hostname
+            # Accessing .port validates malformed and out-of-range ports.
+            parsed.port
+        except (AttributeError, TypeError, ValueError):
+            return False
+        return bool(
+            parsed.scheme.lower() == "https"
+            and host
+            and parsed.username is None
+            and parsed.password is None
+            and (host == "webtoons.com" or host.endswith(".webtoons.com"))
+        )
 
     @property
     def name(self) -> str:
