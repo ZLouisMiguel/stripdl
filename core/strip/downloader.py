@@ -593,7 +593,7 @@ def download_series(
     parser,
     url:               str,
     chapter_range:     Optional[tuple]     = None,
-    specific_chapters: Optional[List[int]] = None,
+    specific_chapters: Optional[List[float]] = None,
     json_progress:     bool                = False,
     progress_cb:       Optional[ProgressCallback] = None,
 ) -> Path:
@@ -701,7 +701,7 @@ def _try_load_cached_series_info(url: str) -> Optional[SeriesInfo]:
 
 def _passes_filter(ch, chapter_range, specific_chapters) -> bool:
     if specific_chapters:
-        return int(ch.number) in specific_chapters
+        return ch.number in specific_chapters
     if chapter_range:
         s, e = chapter_range
         return s <= ch.number <= e

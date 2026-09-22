@@ -35,6 +35,11 @@ console = Console()
 _VERSION = "0.3.1"
 
 
+def format_chapter_number(number: float) -> str:
+    value = float(number)
+    return str(int(value)) if value.is_integer() else f"{value:g}"
+
+
 # ────────────────────────────────────────────────────────────────────
 #  Root group
 # ────────────────────────────────────────────────────────────────────
@@ -129,7 +134,7 @@ def _wait_animated(done: threading.Event, progress: Progress, task_id: TaskID,
 @click.argument("url")
 @click.option("--chapters", "-c",
               help="Chapters: range '1-20' or list '1,3,5'.")
-@click.option("--start", "-s", default=None, type=int,
+@click.option("--start", "-s", default=None, type=float,
               help="Start from this chapter number (inclusive). Downloads chapter N through the latest.")
 @click.option("--json-progress", is_flag=True, hidden=True)
 @click.option("--output", "-o", type=click.Path())
@@ -192,7 +197,7 @@ def download(
                 console.print("[red]Invalid range. Use e.g. 1-10[/red]"); sys.exit(1)
         else:
             try:
-                specific_chapters = [int(x.strip()) for x in chapters.split(",")]
+                specific_chapters = [float(x.strip()) for x in chapters.split(",")]
             except ValueError:
                 console.print("[red]Invalid list. Use e.g. 1,2,5[/red]"); sys.exit(1)
     elif start is not None:
@@ -253,7 +258,7 @@ def download(
         watchdog.ping()
         with cb_lock:
             ch    = cp.chapter_number
-            label = f"Ch {int(ch):>4}  {cp.chapter_title[:36]}"
+            label = f"Ch {format_chapter_number(ch):>4}  {cp.chapter_title[:36]}"
 
             # ── New pipeline events ──────────────────────────────────
             if cp.status == "chapter_found":
@@ -408,7 +413,7 @@ def list_chapters(url: str):
     table.add_column("Title")
     table.add_column("Date", style="dim",  width=12)
     for ch in chapters:
-        table.add_row(str(int(ch.number)), ch.title, ch.date)
+        table.add_row(format_chapter_number(ch.number), ch.title, ch.date)
     console.print(table)
     console.print(f"\n[dim]Total: {len(chapters)} chapters[/dim]")
 
