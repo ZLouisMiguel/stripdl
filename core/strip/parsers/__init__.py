@@ -2,9 +2,11 @@
 # Parser registry – automatically maps URL patterns to the correct parser class.
 
 from strip.parsers.webtoons import WebtoonsParser
+from strip.parsers.weebcentral import WeebCentralParser
 
 PARSERS = [
     WebtoonsParser,
+    WeebCentralParser,
 ]
 
 
@@ -15,5 +17,5 @@ def get_parser(url: str):
             return cls()
     raise ValueError(
         f"No parser found for URL: {url}\n"
-        "Supported sites: webtoons.com"
+        "Supported sites: webtoons.com, weebcentral.com"
     )
