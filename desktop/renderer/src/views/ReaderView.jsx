@@ -104,6 +104,10 @@ export default function ReaderView({
     let cancelled = false;
     if (!chapter) return;
 
+    // Immediately scroll back to top when switching chapters so we never
+    // start mid-page on a fresh chapter.
+    if (containerRef.current) containerRef.current.scrollTop = 0;
+
     setPages([]);
     setError(null);
     setVisibleIndex(0);
@@ -281,6 +285,30 @@ export default function ReaderView({
     container.addEventListener("scroll", handleScroll, { passive: true });
     return () => container.removeEventListener("scroll", handleScroll);
   }, [handleScroll]);
+
+  // Pinch-to-zoom via trackpad: wheel events with ctrlKey are fired by the OS
+  // for pinch gestures. We intercept them and drive our zoom state instead of
+  // letting the browser perform its own page-level zoom.
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container) return;
+
+    function onWheel(e) {
+      if (!e.ctrlKey) return;
+      e.preventDefault();
+      // deltaY < 0  → pinch-out (zoom in)   deltaY > 0 → pinch-in (zoom out)
+      // Scale the delta so small trackpad movements feel natural.
+      const delta = e.deltaY * -0.005;
+      setZoom((z) => {
+        const next = z + delta;
+        return Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, +next.toFixed(3)));
+      });
+    }
+
+    // Must be non-passive so we can call preventDefault()
+    container.addEventListener("wheel", onWheel, { passive: false });
+    return () => container.removeEventListener("wheel", onWheel);
+  }, [ZOOM_MIN, ZOOM_MAX]);
 
   useEffect(() => {
     function onKeydown(e) {
