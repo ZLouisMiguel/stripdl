@@ -63,6 +63,15 @@ export default function ReaderView({
   const [loadedSet, setLoadedSet] = useState(() => new Set());
   const [startPage, setStartPage] = useState(0);
   const [pageHeights, setPageHeights] = useState([]);
+  const [zoom, setZoom] = useState(1);
+
+  const ZOOM_MIN = 0.5;
+  const ZOOM_MAX = 3;
+  const ZOOM_STEP = 0.25;
+
+  function zoomIn()  { setZoom((z) => Math.min(ZOOM_MAX, +(z + ZOOM_STEP).toFixed(2))); }
+  function zoomOut() { setZoom((z) => Math.max(ZOOM_MIN, +(z - ZOOM_STEP).toFixed(2))); }
+  function zoomReset() { setZoom(1); }
 
   const containerRef = useRef(null);
   const pageRefs = useRef([]);
@@ -299,6 +308,10 @@ export default function ReaderView({
         onNavigateChapter(-1);
         return;
       }
+      // Zoom shortcuts: = / + to zoom in, - to zoom out, 0 to reset
+      if (key === "=" || key === "+") { e.preventDefault(); zoomIn();    return; }
+      if (key === "-")                 { e.preventDefault(); zoomOut();   return; }
+      if (key === "0")                 { e.preventDefault(); zoomReset(); return; }
 
       const container = containerRef.current;
       if (!container) return;
@@ -388,11 +401,47 @@ export default function ReaderView({
           <span>
             {pages.length > 0 ? `${visibleIndex + 1} / ${pages.length}` : ""}
           </span>
+          {/* Zoom controls */}
+          <div className="reader-zoom-controls" aria-label="Zoom controls">
+            <button
+              id="zoom-out-btn"
+              className="btn btn-ghost icon-btn reader-zoom-btn"
+              title="Zoom out (−)"
+              disabled={zoom <= ZOOM_MIN}
+              onClick={zoomOut}
+            >
+              −
+            </button>
+            <button
+              id="zoom-reset-btn"
+              className="btn btn-ghost reader-zoom-level"
+              title="Reset zoom (0)"
+              onClick={zoomReset}
+            >
+              {Math.round(zoom * 100)}%
+            </button>
+            <button
+              id="zoom-in-btn"
+              className="btn btn-ghost icon-btn reader-zoom-btn"
+              title="Zoom in (=)"
+              disabled={zoom >= ZOOM_MAX}
+              onClick={zoomIn}
+            >
+              +
+            </button>
+          </div>
         </div>
       </div>
 
       <div id="reader-container" ref={containerRef}>
-        <div id="reader-pages">
+        <div
+          id="reader-pages"
+          style={{
+            transform: zoom !== 1 ? `scale(${zoom})` : undefined,
+            transformOrigin: "top center",
+            transition: "transform 0.15s ease",
+          }}
+        >
           {error && (
             <div className="reader-page-error">
               Could not load pages: {error}
