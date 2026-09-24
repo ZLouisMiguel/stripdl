@@ -145,8 +145,10 @@ select {
 }
 
 .logo-mark {
-  font-size: 20px;
-  color: var(--steel-light);
+  width: 22px;
+  height: 22px;
+  object-fit: contain;
+  flex-shrink: 0;
 }
 
 .logo-text {
