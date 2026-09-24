@@ -38,6 +38,7 @@ Downloads are saved locally, resume after interruptions, and remain available fo
 | Webtoon | `webtoons.com` |
 | WeebCentral | `weebcentral.com` |
 | Comix | `comix.to` |
+| Asura Scans | `asurascans.com` |
 
 ## Quick start
 
