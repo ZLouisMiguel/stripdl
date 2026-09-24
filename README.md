@@ -9,7 +9,7 @@
 </p>
 
 <p align="center">
-  MIT ·
+  <a href="LICENSE">MIT</a> ·
   Python CLI · Electron reader · Windows · macOS · Linux
 </p>
 
