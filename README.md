@@ -116,23 +116,3 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for the project structure, parser guide, 
 ## License
 
 MIT
-
-Commit message:
-
-docs(readme): split changelog into CHANGELOG.md; add CLI banner; misc accuracy fixes
-
-- Add the actual stripdl CLI startup banner (verbatim from cli.py's
-  group docstring) as a code block near the top of the README, so it
-  doubles as a preview of what running the tool looks like.
-- Remove the Changelog section — full history now lives in the new
-  CHANGELOG.md, linked from Contributing.
-- Update "Reader app" quick-start from `npm start` (now runs
-  electron-vite preview, i.e. the built app) to `npm run dev` (the
-  actual dev-server command as of the electron-vite migration).
-- Add brief "Auto-download" bullet under The app, and a short "Local
-  image access" note under How it works, describing the strip-file://
-  protocol and why it exists — both features/fixes landed since the
-  README was last touched but weren't documented here.
-- Platform notes: replace the stale file:// forward-slash note (no
-  longer accurate — images are served via strip-file:// now) with a
-  note on why that protocol is used on Windows specifically.
