@@ -22,7 +22,7 @@ export default function Sidebar({ currentView, onNavigate }) {
   return (
     <nav id="sidebar">
       <div className="sidebar-logo">
-        <span className="logo-mark">◈</span>
+        <img className="logo-mark" src="/strip-logo.png" alt="" />
         <span className="logo-text">strip</span>
       </div>
       <ul className="nav-links">
