@@ -707,6 +707,51 @@ select {
   white-space: nowrap;
 }
 
+/* ── Zoom controls ───────────────────────────────────────── */
+.reader-zoom-controls {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 2px;
+  background: var(--bg-surface);
+}
+
+.reader-zoom-btn {
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  font-size: 16px;
+  font-weight: 700;
+  line-height: 1;
+  border-radius: 6px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-primary);
+  transition: background 0.12s ease, color 0.12s ease;
+}
+
+.reader-zoom-btn:disabled {
+  opacity: 0.3;
+  cursor: default;
+  pointer-events: none;
+}
+
+.reader-zoom-level {
+  min-width: 48px;
+  height: 28px;
+  padding: 0 4px;
+  font-size: 11px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-secondary);
+  border-radius: 6px;
+  letter-spacing: 0.02em;
+  text-align: center;
+}
+
 #btn-prev-chapter:disabled,
 #btn-next-chapter:disabled {
   opacity: 0.25;
@@ -1270,6 +1315,34 @@ select {
 }
 ::-webkit-scrollbar-thumb:hover {
   background: var(--text-muted);
+}
+
+/* ── Latest Read Chapter Badge ──────────────────────────── */
+.series-card-latest-badge {
+  position: absolute;
+  bottom: 28px; /* sit just above the progress bar */
+  left: 6px;
+  background: rgba(20, 20, 30, 0.78);
+  color: #a8e6cf;
+  font-size: 9px;
+  font-weight: 700;
+  padding: 3px 8px;
+  border-radius: 100px;
+  backdrop-filter: blur(6px);
+  z-index: 20;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  border: 1px solid rgba(168, 230, 207, 0.3);
+  font-family: var(--font-body);
+  pointer-events: none;
+  white-space: nowrap;
+  transition: opacity 0.2s ease;
+}
+
+[data-theme="dark"] .series-card-latest-badge {
+  background: rgba(168, 230, 207, 0.18);
+  color: #a8e6cf;
+  border-color: rgba(168, 230, 207, 0.4);
 }
 
 /* ── Continue Reading ────────────────────────────────────── */

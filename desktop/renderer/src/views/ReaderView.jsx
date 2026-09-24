@@ -63,6 +63,18 @@ export default function ReaderView({
   const [loadedSet, setLoadedSet] = useState(() => new Set());
   const [startPage, setStartPage] = useState(0);
   const [pageHeights, setPageHeights] = useState([]);
+  const [zoom, setZoom] = useState(1);
+
+  const ZOOM_MIN = 0.5;
+  const ZOOM_MAX = 3;
+  const ZOOM_STEP = 0.25;
+
+  function zoomIn()  { setZoom((z) => Math.min(ZOOM_MAX, +(z + ZOOM_STEP).toFixed(2))); }
+  function zoomOut() { setZoom((z) => Math.max(ZOOM_MIN, +(z - ZOOM_STEP).toFixed(2))); }
+  function zoomReset() { setZoom(1); }
+
+  // Tracks the zoom level from the previous render so we can compensate scrollTop.
+  const prevZoomRef = useRef(1);
 
   const containerRef = useRef(null);
   const pageRefs = useRef([]);
@@ -94,6 +106,10 @@ export default function ReaderView({
   useEffect(() => {
     let cancelled = false;
     if (!chapter) return;
+
+    // Immediately scroll back to top when switching chapters so we never
+    // start mid-page on a fresh chapter.
+    if (containerRef.current) containerRef.current.scrollTop = 0;
 
     setPages([]);
     setError(null);
@@ -273,6 +289,42 @@ export default function ReaderView({
     return () => container.removeEventListener("scroll", handleScroll);
   }, [handleScroll]);
 
+  // Pinch-to-zoom via trackpad: wheel events with ctrlKey are fired by the OS
+  // for pinch gestures. We intercept them and drive our zoom state instead of
+  // letting the browser perform its own page-level zoom.
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container) return;
+
+    function onWheel(e) {
+      if (!e.ctrlKey) return;
+      e.preventDefault();
+      // deltaY < 0  → pinch-out (zoom in)   deltaY > 0 → pinch-in (zoom out)
+      // Scale the delta so small trackpad movements feel natural.
+      const delta = e.deltaY * -0.005;
+      setZoom((z) => {
+        const next = z + delta;
+        return Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, +next.toFixed(3)));
+      });
+    }
+
+    // Must be non-passive so we can call preventDefault()
+    container.addEventListener("wheel", onWheel, { passive: false });
+    return () => container.removeEventListener("wheel", onWheel);
+  }, [ZOOM_MIN, ZOOM_MAX]);
+
+  // Scroll-anchor on zoom: when zoom changes, compensate scrollTop so the
+  // content currently at the top of the viewport stays there.
+  // transform:scale() doesn't affect layout, so without this the page appears
+  // to jump because scrollTop stays fixed while the content shifts visually.
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container) return;
+    const ratio = zoom / prevZoomRef.current;
+    container.scrollTop = container.scrollTop * ratio;
+    prevZoomRef.current = zoom;
+  }, [zoom]);
+
   useEffect(() => {
     function onKeydown(e) {
       const tag = e.target.tagName;
@@ -299,6 +351,10 @@ export default function ReaderView({
         onNavigateChapter(-1);
         return;
       }
+      // Zoom shortcuts: = / + to zoom in, - to zoom out, 0 to reset
+      if (key === "=" || key === "+") { e.preventDefault(); zoomIn();    return; }
+      if (key === "-")                 { e.preventDefault(); zoomOut();   return; }
+      if (key === "0")                 { e.preventDefault(); zoomReset(); return; }
 
       const container = containerRef.current;
       if (!container) return;
@@ -388,11 +444,47 @@ export default function ReaderView({
           <span>
             {pages.length > 0 ? `${visibleIndex + 1} / ${pages.length}` : ""}
           </span>
+          {/* Zoom controls */}
+          <div className="reader-zoom-controls" aria-label="Zoom controls">
+            <button
+              id="zoom-out-btn"
+              className="btn btn-ghost icon-btn reader-zoom-btn"
+              title="Zoom out (−)"
+              disabled={zoom <= ZOOM_MIN}
+              onClick={zoomOut}
+            >
+              −
+            </button>
+            <button
+              id="zoom-reset-btn"
+              className="btn btn-ghost reader-zoom-level"
+              title="Reset zoom (0)"
+              onClick={zoomReset}
+            >
+              {Math.round(zoom * 100)}%
+            </button>
+            <button
+              id="zoom-in-btn"
+              className="btn btn-ghost icon-btn reader-zoom-btn"
+              title="Zoom in (=)"
+              disabled={zoom >= ZOOM_MAX}
+              onClick={zoomIn}
+            >
+              +
+            </button>
+          </div>
         </div>
       </div>
 
       <div id="reader-container" ref={containerRef}>
-        <div id="reader-pages">
+        <div
+          id="reader-pages"
+          style={{
+            transform: zoom !== 1 ? `scale(${zoom})` : undefined,
+            transformOrigin: "top center",
+            transition: "transform 0.15s ease",
+          }}
+        >
           {error && (
             <div className="reader-page-error">
               Could not load pages: {error}
