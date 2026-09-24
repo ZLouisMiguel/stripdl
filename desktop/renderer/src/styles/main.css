@@ -705,6 +705,51 @@ select {
   white-space: nowrap;
 }
 
+/* ── Zoom controls ───────────────────────────────────────── */
+.reader-zoom-controls {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 2px;
+  background: var(--bg-surface);
+}
+
+.reader-zoom-btn {
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  font-size: 16px;
+  font-weight: 700;
+  line-height: 1;
+  border-radius: 6px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-primary);
+  transition: background 0.12s ease, color 0.12s ease;
+}
+
+.reader-zoom-btn:disabled {
+  opacity: 0.3;
+  cursor: default;
+  pointer-events: none;
+}
+
+.reader-zoom-level {
+  min-width: 48px;
+  height: 28px;
+  padding: 0 4px;
+  font-size: 11px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-secondary);
+  border-radius: 6px;
+  letter-spacing: 0.02em;
+  text-align: center;
+}
+
 #btn-prev-chapter:disabled,
 #btn-next-chapter:disabled {
   opacity: 0.25;
