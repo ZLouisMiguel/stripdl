@@ -17,7 +17,7 @@ from typing import List, Optional
 
 import click
 from rich.console import Console
-from rich.table import Table
+from rich.table import Table, Column
 from rich.panel import Panel
 from rich.progress import (
     Progress, SpinnerColumn, BarColumn, TextColumn, TaskID,
@@ -36,6 +36,67 @@ console = Console()
 def format_chapter_number(number: float) -> str:
     value = float(number)
     return str(int(value)) if value.is_integer() else f"{value:g}"
+
+
+def format_terminal_chapter_label(number: float, title: str) -> str:
+    """Return a compact chapter label for the interactive progress view."""
+    return f"Ch {format_chapter_number(number)} · {title}"
+
+
+class _TerminalProgressState:
+    """Track the small amount of state needed by the interactive progress view."""
+
+    def __init__(self):
+        self.total = 0
+        self.completed = 0
+        self.active: dict[float, str] = {}
+        self._current: Optional[float] = None
+        self._last_activity: Optional[tuple[float, str]] = None
+
+    def chapter_found(self, number: float, title: str):
+        self.total += 1
+        if self._current is None:
+            self._current = number
+            self._last_activity = (number, title)
+
+    def chapter_started(self, number: float, title: str):
+        self.active[number] = title
+        self._current = number
+        self._last_activity = (number, title)
+
+    def chapter_done(self, number: float):
+        title = self.active.pop(number, None)
+        self.completed += 1
+        if title is not None:
+            self._last_activity = (number, title)
+        self._select_next_focus()
+
+    def chapter_error(self, number: float, title: str):
+        self.active.pop(number, None)
+        self._current = number
+        self._last_activity = (number, title)
+        self._select_next_focus(prefer_last_activity=True)
+
+    def chapter_skipped(self):
+        self.total = max(1, self.total - 1)
+
+    def focus_label(self) -> str:
+        if self._current in self.active:
+            title = self.active[self._current]
+            return format_terminal_chapter_label(self._current, title)
+        if self._last_activity is not None:
+            number, title = self._last_activity
+            return format_terminal_chapter_label(number, title)
+        return "Overall"
+
+    def status_label(self) -> str:
+        return f"{self.completed}/{self.total} done"
+
+    def _select_next_focus(self, prefer_last_activity: bool = False):
+        if self.active:
+            self._current = next(reversed(self.active))
+        elif not prefer_last_activity and self._last_activity is not None:
+            self._current = self._last_activity[0]
 
 
 # ────────────────────────────────────────────────────────────────────
@@ -238,10 +299,16 @@ def download(
 
     progress = Progress(
         SpinnerColumn(),
-        TextColumn("[bold]{task.description:<54}"),
-        BarColumn(bar_width=24),
+        TextColumn(
+            "[bold]{task.description}",
+            table_column=Column(max_width=36, no_wrap=True, overflow="ellipsis"),
+        ),
+        BarColumn(bar_width=18),
         TextColumn("[cyan]{task.completed}[/cyan]/[white]{task.total}[/white]"),
-        TextColumn(" {task.fields[status]}"),
+        TextColumn(
+            " {task.fields[status]}",
+            table_column=Column(max_width=18, no_wrap=True, overflow="ellipsis"),
+        ),
         console=console,
         transient=False,
     )
@@ -251,24 +318,38 @@ def download(
     ch_task:       list[Optional[TaskID]] = [None]   # fetch-progress row
     cb_lock  = threading.Lock()
     watchdog = _ProgressWatchdog(progress, stall_secs=20.0)
+    progress_state = _TerminalProgressState()
+
+    def refresh_overall():
+        if overall_task[0] is not None:
+            progress.update(
+                overall_task[0],
+                description=f"Overall · {progress_state.focus_label()}",
+                total=progress_state.total,
+                status=progress_state.status_label(),
+            )
 
     def on_progress(cp: ChapterProgress):
         watchdog.ping()
         with cb_lock:
             ch    = cp.chapter_number
-            label = f"Ch {format_chapter_number(ch):>4}  {cp.chapter_title[:36]}"
 
             # ── New pipeline events ──────────────────────────────────
             if cp.status == "chapter_found":
                 # A new chapter was discovered; expand the overall bar total by 1.
+                progress_state.chapter_found(ch, cp.chapter_title)
                 if overall_task[0] is not None:
-                    t = progress.tasks[overall_task[0]]
-                    progress.update(overall_task[0], total=max(1, (t.total or 0) + 1))
+                    progress.update(overall_task[0], total=progress_state.total)
                 else:
                     # Overall bar doesn't exist yet — create it now on first chapter
-                    tid = progress.add_task("[bold white]Overall",
-                        total=1, completed=0, status="")
+                    tid = progress.add_task(
+                        f"Overall · {progress_state.focus_label()}",
+                        total=progress_state.total,
+                        completed=0,
+                        status=progress_state.status_label(),
+                    )
                     overall_task[0] = tid
+                refresh_overall()
                 # Also update the fetch-progress row
                 if ch_task[0] is not None:
                     progress.update(ch_task[0],
@@ -285,48 +366,48 @@ def download(
             # ────────────────────────────────────────────────────────
 
             if cp.status == "skipped":
-                if ch not in chapter_tasks:
-                    tid = progress.add_task(label,
-                        total=max(cp.pages_total, 1),
-                        completed=cp.pages_total,
-                        status="[dim]skipped[/dim]")
-                    chapter_tasks[ch] = tid
+                progress_state.chapter_skipped()
                 # Skipped chapters don't count as "downloaded" — remove from overall
-                if overall_task[0] is not None:
-                    t = progress.tasks[overall_task[0]]
-                    new_total = max(1, (t.total or 1) - 1)
-                    progress.update(overall_task[0], total=new_total)
+                refresh_overall()
                 return
 
             if cp.status.startswith("rate_limited:"):
                 secs = cp.status.split(":")[1]
                 if ch in chapter_tasks:
+                    progress_state.chapter_started(ch, cp.chapter_title)
                     progress.update(chapter_tasks[ch],
                         status=f"[yellow]rate-limited – waiting {secs}s[/yellow]")
+                    refresh_overall()
                 return
 
             if ch not in chapter_tasks:
-                tid = progress.add_task(label,
+                tid = progress.add_task(format_terminal_chapter_label(ch, cp.chapter_title),
                     total=max(cp.pages_total, 1), completed=0, status="")
                 chapter_tasks[ch] = tid
                 watchdog.register(ch, tid)
 
             tid = chapter_tasks[ch]
+            progress_state.chapter_started(ch, cp.chapter_title)
 
             if cp.status == "done":
                 progress.update(tid, completed=cp.pages_total,
-                    status="[green]✓ done[/green]")
+                    status="[green]✓ done[/green]", visible=False)
                 watchdog.unregister(ch)
+                progress_state.chapter_done(ch)
                 if overall_task[0] is not None:
                     progress.advance(overall_task[0], 1)
+                refresh_overall()
             elif cp.status == "error":
                 progress.update(tid, status="[red]✗ error[/red]")
                 watchdog.unregister(ch)
+                progress_state.chapter_error(ch, cp.chapter_title)
+                refresh_overall()
             else:
                 progress.update(tid,
                     completed=cp.pages_done,
                     total=max(cp.pages_total, 1),
                     status=f"[dim]{cp.pages_done}/{cp.pages_total}[/dim]")
+                refresh_overall()
 
     with progress:
         watchdog.start()
