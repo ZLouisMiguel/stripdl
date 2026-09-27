@@ -15,6 +15,7 @@ import {
   getWindowSpacerHeights,
 } from "../lib/readerWindow.mjs";
 import { toFileUrl } from "../lib/fileUrl.js";
+import { getReaderZoomStyle } from "../lib/readerZoom.mjs";
 
 function PageImage({ src, index, eager, loaded, wrapperRef }) {
   const [imgLoaded, setImgLoaded] = useState(false);
@@ -72,9 +73,6 @@ export default function ReaderView({
   function zoomIn()  { setZoom((z) => Math.min(ZOOM_MAX, +(z + ZOOM_STEP).toFixed(2))); }
   function zoomOut() { setZoom((z) => Math.max(ZOOM_MIN, +(z - ZOOM_STEP).toFixed(2))); }
   function zoomReset() { setZoom(1); }
-
-  // Tracks the zoom level from the previous render so we can compensate scrollTop.
-  const prevZoomRef = useRef(1);
 
   const containerRef = useRef(null);
   const pageRefs = useRef([]);
@@ -313,18 +311,6 @@ export default function ReaderView({
     return () => container.removeEventListener("wheel", onWheel);
   }, [ZOOM_MIN, ZOOM_MAX]);
 
-  // Scroll-anchor on zoom: when zoom changes, compensate scrollTop so the
-  // content currently at the top of the viewport stays there.
-  // transform:scale() doesn't affect layout, so without this the page appears
-  // to jump because scrollTop stays fixed while the content shifts visually.
-  useEffect(() => {
-    const container = containerRef.current;
-    if (!container) return;
-    const ratio = zoom / prevZoomRef.current;
-    container.scrollTop = container.scrollTop * ratio;
-    prevZoomRef.current = zoom;
-  }, [zoom]);
-
   useEffect(() => {
     function onKeydown(e) {
       const tag = e.target.tagName;
@@ -480,9 +466,7 @@ export default function ReaderView({
         <div
           id="reader-pages"
           style={{
-            transform: zoom !== 1 ? `scale(${zoom})` : undefined,
-            transformOrigin: "top center",
-            transition: "transform 0.15s ease",
+            ...getReaderZoomStyle(zoom),
           }}
         >
           {error && (
