@@ -19,28 +19,36 @@ Thanks for your interest in contributing. This document covers everything you ne
 
 ## Project structure
 
+```text
 strip/
 ├── core/
-│ ├── strip/ # Python package (CLI + downloader)
-│ │ ├── cli.py # Click commands, Rich progress display
-│ │ ├── downloader.py # Pipeline orchestrator, chapter/image download
-│ │ ├── config.py # ~/.strip/config.json wrapper
-│ │ ├── library.py # Scans local download directory
-│ │ └── parsers/
-│ │ ├── base.py # SiteParser ABC, SeriesInfo, ChapterInfo
-│ │ ├── init.py # Parser registry (PARSERS list + get_parser())
-│ │ └── webtoons.py # Webtoons.com implementation
-│ ├── tests/ # unittest coverage for CLI, downloader, and parsers
-│ ├── requirements.txt
-│ └── setup.py
+│   ├── strip/                  # Python package (CLI + downloader)
+│   │   ├── cli.py              # Click commands and Rich progress display
+│   │   ├── config.py           # ~/.strip/config.json wrapper
+│   │   ├── downloader.py       # Chapter and image download pipeline
+│   │   ├── library.py          # Local download directory scanner
+│   │   └── parsers/
+│   │       ├── __init__.py     # Parser registry and get_parser()
+│   │       ├── asurascans.py   # Asura Scans implementation
+│   │       ├── base.py         # SiteParser ABC and data models
+│   │       ├── comix.py        # Comix implementation
+│   │       ├── mangakakalot.py # MangaKakalot implementation
+│   │       ├── webtoons.py     # Webtoons implementation
+│   │       └── weebcentral.py  # WeebCentral implementation
+│   ├── tests/                  # CLI, downloader, and parser tests
+│   ├── requirements.txt
+│   └── setup.py
 ├── desktop/
-│ ├── main/
-│ │ ├── index.js # Main process: IPC handlers, CLI subprocess
-│ │ ├── configKeys.js # Electron config key -> CLI flag mapping
-│ │ └── preload.js # contextBridge API exposed to renderer
-│ ├── renderer/src/ # React views, components, hooks, and styles
-│ └── test/ # Node built-in tests for main and renderer helpers
-└── build_cli.py # PyInstaller wrapper
+│   ├── main/                   # Electron main process and preload code
+│   ├── renderer/src/           # React views, components, hooks, and styles
+│   └── test/                   # Node built-in tests
+├── assets/                     # Project assets
+├── build_cli.py                # PyInstaller wrapper
+├── CHANGELOG.md
+├── CONTRIBUTING.md
+├── LICENSE
+└── README.md
+```
 
 ---
 
