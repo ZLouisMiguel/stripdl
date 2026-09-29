@@ -39,6 +39,19 @@ class ReleaseWorkflowTests(unittest.TestCase):
         self.assertIn('--version "${{ needs.validate.outputs.version }}"', workflow)
         self.assertNotIn('--version "$RELEASE_VERSION"', workflow)
 
+    def test_linux_arm64_uses_native_cli_and_x64_packager(self):
+        workflow = WORKFLOW.read_text(encoding="utf-8")
+        self.assertIn("build-linux-arm64-cli:", workflow)
+        self.assertIn("needs: [validate, build-linux-arm64-cli]", workflow)
+        self.assertIn("- name: Linux arm64\n            runner: ubuntu-24.04\n", workflow)
+        self.assertIn("runs-on: ubuntu-24.04-arm", workflow)
+        self.assertIn("actions/download-artifact@v4", workflow)
+        self.assertIn("name: linux-arm64-cli-native", workflow)
+        self.assertIn("desktop/resources/strip-cli/stripdl", workflow)
+        self.assertIn("chmod +x desktop/resources/strip-cli/stripdl", workflow)
+        self.assertIn("matrix.platform != 'linux' || matrix.arch != 'arm64'", workflow)
+        self.assertIn("matrix.platform == 'linux' && matrix.arch == 'arm64'", workflow)
+
     def test_electron_builder_metadata_paths_and_linux_package_metadata(self):
         package = json.loads((ROOT / "desktop" / "package.json").read_text(encoding="utf-8"))
         build = package["build"]
