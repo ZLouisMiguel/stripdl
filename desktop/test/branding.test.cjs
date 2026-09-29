@@ -27,3 +27,8 @@ test("CLI build manifest includes every registered parser", () => {
     assert.match(build, new RegExp(`strip\\.parsers\\.${parser}`));
   }
 });
+
+test("CLI build status output is safe on Windows code pages", () => {
+  const build = fs.readFileSync(path.resolve(root, "..", "build_cli.py"), "utf8");
+  assert.doesNotMatch(build, /[✓✗]/);
+});

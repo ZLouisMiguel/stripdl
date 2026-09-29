@@ -64,12 +64,12 @@ def main():
     if src.exists():
         shutil.copy2(src, dst)
         os.chmod(dst, 0o755)
-        print(f"\n✓ Executable copied to: {dst}")
+        print(f"\n[ok] Executable copied to: {dst}")
     else:
-        print(f"\n✗ Build failed — {src} not found", file=sys.stderr)
+        print(f"\n[error] Build failed - {src} not found", file=sys.stderr)
         sys.exit(1)
 
-    print(f"\n✓ Build complete: {DIST / exe_name}")
+    print(f"\n[ok] Build complete: {DIST / exe_name}")
     print(f"  Run: {dst}")
 
 
