@@ -5,12 +5,14 @@ from strip.parsers.webtoons import WebtoonsParser
 from strip.parsers.weebcentral import WeebCentralParser
 from strip.parsers.comix import ComixParser
 from strip.parsers.asurascans import AsuraScansParser
+from strip.parsers.mangakakalot import MangaKakalotParser
 
 PARSERS = [
     WebtoonsParser,
     WeebCentralParser,
     ComixParser,
     AsuraScansParser,
+    MangaKakalotParser,
 ]
 
 
@@ -21,5 +23,5 @@ def get_parser(url: str):
             return cls()
     raise ValueError(
         f"No parser found for URL: {url}\n"
-        "Supported sites: webtoons.com, weebcentral.com, comix.to, asurascans.com"
+        "Supported sites: webtoons.com, weebcentral.com, comix.to, asurascans.com, mangakakalot.gg"
     )

@@ -141,6 +141,15 @@ def _normalize_url(url: str) -> str:
 
 
 def _extract_cover_url(soup: BeautifulSoup) -> str:
+    # Webtoon exposes a wide character banner in the detail header and a
+    # square poster as og:image. The poster matches Strip's portrait cover
+    # card; prefer it so object-fit: cover does not crop the banner to a
+    # blank center strip.
+    og = soup.select_one("meta[property='og:image']")
+    og_url = og.get("content", "").strip() if og else ""
+    if og_url.startswith("http"):
+        return og_url
+
     for sel in [".detail_header .thmb img", ".detail_header img",
                 ".info_img img", ".thmb_wrap img"]:
         for el in soup.select(sel):
@@ -149,8 +158,7 @@ def _extract_cover_url(soup: BeautifulSoup) -> str:
             src = el.get("src") or el.get("data-src") or ""
             if src.startswith("http") and "pstatic.net" in src:
                 return src
-    og = soup.select_one("meta[property='og:image']")
-    return og.get("content", "") if og else ""
+    return og_url
 
 
 def _page_url(list_url: str, page: int) -> str:

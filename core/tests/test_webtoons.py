@@ -1,8 +1,14 @@
 import unittest
 from unittest.mock import patch
 
+from bs4 import BeautifulSoup
+
 from strip.parsers.base import ChapterInfo
-from strip.parsers.webtoons import ChapterListError, WebtoonsParser
+from strip.parsers.webtoons import (
+    ChapterListError,
+    WebtoonsParser,
+    _extract_cover_url,
+)
 
 
 URL = "https://www.webtoons.com/en/x/list?title_no=1"
@@ -68,3 +74,29 @@ class UrlValidationTests(unittest.TestCase):
         )
         for url in invalid:
             self.assertFalse(parser.supports(url), url)
+
+
+class CoverSelectionTests(unittest.TestCase):
+    def test_prefers_square_poster_over_character_banner(self):
+        soup = BeautifulSoup(
+            """
+            <html>
+              <head>
+                <meta property="og:image" content="https://cdn.test/poster.jpg?type=crop540_540">
+              </head>
+              <body>
+                <div class="detail_header">
+                  <span class="thmb">
+                    <img src="https://webtoon-phinf.pstatic.net/Character.png">
+                  </span>
+                </div>
+              </body>
+            </html>
+            """,
+            "lxml",
+        )
+
+        self.assertEqual(
+            _extract_cover_url(soup),
+            "https://cdn.test/poster.jpg?type=crop540_540",
+        )
