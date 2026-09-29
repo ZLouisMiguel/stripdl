@@ -26,6 +26,13 @@ class ReleaseWorkflowTests(unittest.TestCase):
         self.assertIn("find release -type f -print0", workflow)
         self.assertNotIn("sha256sum * > SHA256SUMS.txt", workflow)
         self.assertIn("gh release create", workflow)
+        publish_job = workflow.split("\n  publish:\n", 1)[1]
+        checkout = "    steps:\n      - name: Check out repository\n        uses: actions/checkout@v4"
+        self.assertIn(checkout, publish_job)
+        self.assertLess(
+            publish_job.index("Check out repository"),
+            publish_job.index("Download all artifacts"),
+        )
         for label in (
             "windows-latest",
             "windows-11-arm",
