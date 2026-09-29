@@ -1,4 +1,4 @@
-# Contributing to strip ◈
+# Contributing to strip
 
 Thanks for your interest in contributing. This document covers everything you need to get set up, the areas where help is most welcome, and the conventions the codebase follows.
 
