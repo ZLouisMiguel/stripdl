@@ -1,8 +1,12 @@
 {
   "name": "strip-reader",
-  "author": "ZLouisMiguel on github",
+  "author": {
+    "name": "ZLouisMiguel",
+    "email": "stripdl@users.noreply.github.com"
+  },
   "version": "0.4.0",
   "description": "Webtoon reader powered by strip",
+  "homepage": "https://github.com/ZLouisMiguel/stripdl",
   "main": "out/main/index.js",
   "scripts": {
     "test": "node --test",
@@ -55,6 +59,7 @@
       "executableName": "strip-reader",
       "description": "Download and read comics offline with Strip.",
       "synopsis": "Offline comic downloader and reader",
+      "maintainer": "Strip maintainers <stripdl@users.noreply.github.com>",
       "desktop": {
         "StartupNotify": "true",
         "X-GNOME-UsesNotifications": "true"
@@ -75,7 +80,7 @@
       "include": "assets/windows/installer.nsh"
     },
     "dmg": {
-      "background": "assets/macos/dmg-background.png",
+      "background": "installer/assets/macos/dmg-background.png",
       "icon": "assets/strip.icns",
       "window": {
         "width": 900,
