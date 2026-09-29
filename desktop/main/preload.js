@@ -4,6 +4,10 @@
 const { contextBridge, ipcRenderer } = require("electron");
 
 contextBridge.exposeInMainWorld("strip", {
+  app: {
+    version: () => ipcRenderer.invoke("app:version"),
+  },
+
   config: {
     get: () => ipcRenderer.invoke("config:get"),
     set: (updates) => ipcRenderer.invoke("config:set", updates),

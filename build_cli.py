@@ -45,6 +45,10 @@ def main():
         "--specpath", str(BUILD),
         # Hidden imports that PyInstaller may miss
         "--hidden-import", "strip.parsers.webtoons",
+        "--hidden-import", "strip.parsers.weebcentral",
+        "--hidden-import", "strip.parsers.comix",
+        "--hidden-import", "strip.parsers.asurascans",
+        "--hidden-import", "strip.parsers.mangakakalot",
         "--hidden-import", "PIL._tkinter_finder",
         "--hidden-import", "lxml.etree",
         "--hidden-import", "lxml._elementpath",

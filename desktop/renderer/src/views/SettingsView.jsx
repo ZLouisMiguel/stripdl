@@ -61,6 +61,11 @@ function BoolSetting({ label, desc, checked, onChange }) {
 
 export default function SettingsView() {
   const { config, updateConfig } = useConfig();
+  const [appVersion, setAppVersion] = useState("—");
+
+  useEffect(() => {
+    window.strip.app.version().then(setAppVersion).catch(() => setAppVersion("—"));
+  }, []);
 
   if (!config) {
     return (
@@ -209,9 +214,10 @@ export default function SettingsView() {
         {/* About */}
         <div className="settings-group card">
           <h2 className="settings-group-title">About</h2>
-          <p className="muted">
-            strip v0.3.1 — webtoon downloader &amp; reader
-          </p>
+          <div className="about-brand">
+            <img src="/strip-logo.png" alt="Strip" className="about-logo" />
+            <p className="muted">strip v{appVersion} — webtoon downloader &amp; reader</p>
+          </div>
         </div>
       </div>
     </section>
