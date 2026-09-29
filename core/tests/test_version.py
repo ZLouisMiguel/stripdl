@@ -12,4 +12,4 @@ class VersionTests(unittest.TestCase):
         self.assertIn(strip.__version__, result.output)
 
     def test_runtime_version_is_target_patch_release(self):
-        self.assertEqual(strip.__version__, "0.3.2")
+        self.assertEqual(strip.__version__, "0.4.0")
