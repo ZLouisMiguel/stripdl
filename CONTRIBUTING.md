@@ -103,7 +103,16 @@ python scripts/sync_version.py --version 0.4.0
 python scripts/sync_version.py --check
 ```
 
-Releases are created from matching `vMAJOR.MINOR.PATCH` tags. The release workflow publishes standalone `stripdl` CLI artifacts and branded Strip Reader installers for Windows, macOS, and Linux. The installer's job is only to install the application; the comic download directory remains configurable inside Strip Reader.
+To build the branded reader locally, first generate the shared installer assets and then use the platform-specific package script:
+
+```bash
+python scripts/generate_release_assets.py
+npm run build:win --prefix desktop    # Windows NSIS installer
+npm run build:mac --prefix desktop    # macOS DMG
+npm run build:linux --prefix desktop  # Linux AppImage and .deb
+```
+
+The release workflow runs the equivalent builds for each supported OS and architecture. Push a matching `vMAJOR.MINOR.PATCH` tag after updating `VERSION` to publish a GitHub Release with standalone `stripdl` CLI archives and branded Strip Reader installers for Windows, macOS, and Linux. A manual workflow dispatch can be used to validate a tag before publishing. Do not configure the comic download directory in the installer; it remains an in-app user setting.
 
 ### Running the CLI against the live app
 
