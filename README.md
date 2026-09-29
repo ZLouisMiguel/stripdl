@@ -108,7 +108,7 @@ npm install --prefix desktop
 Run the checks before opening a pull request:
 
 ```bash
-python -m unittest discover -s core/tests -v
+python -m unittest discover -s core/tests -t core -v
 npm test --prefix desktop
 npm run build --prefix desktop
 python scripts/generate_release_assets.py

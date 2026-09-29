@@ -88,7 +88,7 @@ The renderer is built with React and electron-vite. Edit the files under `deskto
 Every branch push and pull request runs the Python suite, Electron suite, production bundle build, branded asset verification, and a PyInstaller CLI smoke build on Ubuntu, Windows, and macOS. Run the same checks locally before opening a pull request:
 
 ```bash
-python -m unittest discover -s core/tests -v
+python -m unittest discover -s core/tests -t core -v
 npm test --prefix desktop
 npm run build --prefix desktop
 python scripts/generate_release_assets.py
