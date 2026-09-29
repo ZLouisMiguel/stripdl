@@ -22,6 +22,9 @@ class ReleaseWorkflowTests(unittest.TestCase):
         self.assertIn("npx electron-builder", workflow)
         self.assertIn("actions/upload-artifact@v4", workflow)
         self.assertIn("SHA256SUMS.txt", workflow)
+        self.assertIn("create_checksums.py", workflow)
+        self.assertIn("find release -type f -print0", workflow)
+        self.assertNotIn("sha256sum * > SHA256SUMS.txt", workflow)
         self.assertIn("gh release create", workflow)
         for label in (
             "windows-latest",
@@ -108,6 +111,29 @@ class ReleaseWorkflowTests(unittest.TestCase):
             )
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             self.assertTrue((output / "stripdl-0.4.0-linux-arm64.tar.gz").is_file())
+
+    def test_checksum_script_handles_nested_release_artifacts(self):
+        script = ROOT / ".github" / "scripts" / "create_checksums.py"
+        with tempfile.TemporaryDirectory() as directory:
+            release = Path(directory) / "release"
+            (release / "desktop").mkdir(parents=True)
+            (release / "release-cli").mkdir()
+            (release / "desktop" / "strip-win.exe").write_bytes(b"windows")
+            (release / "release-cli" / "stripdl-linux.tar.gz").write_bytes(b"linux")
+            output = release / "SHA256SUMS.txt"
+
+            result = subprocess.run(
+                [sys.executable, str(script), "--root", str(release), "--output", str(output)],
+                cwd=ROOT,
+                capture_output=True,
+                text=True,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            checksums = output.read_text(encoding="utf-8")
+            self.assertIn("desktop/strip-win.exe", checksums)
+            self.assertIn("release-cli/stripdl-linux.tar.gz", checksums)
+            self.assertNotIn("SHA256SUMS.txt", checksums)
 
 
 if __name__ == "__main__":
