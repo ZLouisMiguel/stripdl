@@ -39,6 +39,7 @@ Downloads are saved locally, resume after interruptions, and remain available fo
 | WeebCentral | `weebcentral.com` |
 | Comix | `comix.to` |
 | Asura Scans | `asurascans.com` |
+| MangaKakalot | `mangakakalot.gg` |
 
 ## Quick start
 
@@ -110,9 +111,13 @@ Run the checks before opening a pull request:
 python -m unittest discover -s core/tests -v
 npm test --prefix desktop
 npm run build --prefix desktop
+python scripts/generate_release_assets.py
+python scripts/verify_release_assets.py
 ```
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for the project structure, parser guide, coding conventions, and pull request workflow.
+
+Pushes and pull requests run the same checks through GitHub Actions. Versioned releases are created from `vMAJOR.MINOR.PATCH` tags and include standalone CLI artifacts plus branded Strip Reader installers.
 
 ## License
 

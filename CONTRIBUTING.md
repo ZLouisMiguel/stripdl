@@ -83,6 +83,28 @@ npm run build       # verifies production main, preload, and renderer bundles
 
 The renderer is built with React and electron-vite. Edit the files under `desktop/renderer/`; the development server reloads renderer changes automatically.
 
+### Continuous integration and releases
+
+Every branch push and pull request runs the Python suite, Electron suite, production bundle build, branded asset verification, and a PyInstaller CLI smoke build on Ubuntu, Windows, and macOS. Run the same checks locally before opening a pull request:
+
+```bash
+python -m unittest discover -s core/tests -v
+npm test --prefix desktop
+npm run build --prefix desktop
+python scripts/generate_release_assets.py
+python scripts/verify_release_assets.py
+python build_cli.py
+```
+
+The shared project version is stored in `VERSION`. Synchronize and validate it with:
+
+```bash
+python scripts/sync_version.py --version 0.4.0
+python scripts/sync_version.py --check
+```
+
+Releases are created from matching `vMAJOR.MINOR.PATCH` tags. The release workflow publishes standalone `stripdl` CLI artifacts and branded Strip Reader installers for Windows, macOS, and Linux. The installer's job is only to install the application; the comic download directory remains configurable inside Strip Reader.
+
 ### Running the CLI against the live app
 
 The Electron app spawns `stripdl` from `PATH` during development (`npm run dev`) and from `resources/strip-cli/stripdl` in a packaged build. With `pip install -e .` active, development runs pick up local CLI changes automatically.
