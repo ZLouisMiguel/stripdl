@@ -1,4 +1,5 @@
 import os
+import json
 import subprocess
 import sys
 import tempfile
@@ -32,6 +33,22 @@ class ReleaseWorkflowTests(unittest.TestCase):
         ):
             self.assertIn(label, workflow)
         self.assertNotIn("strip-data", workflow)
+
+    def test_release_version_argument_is_shell_independent(self):
+        workflow = WORKFLOW.read_text(encoding="utf-8")
+        self.assertIn('--version "${{ needs.validate.outputs.version }}"', workflow)
+        self.assertNotIn('--version "$RELEASE_VERSION"', workflow)
+
+    def test_electron_builder_metadata_paths_and_linux_package_metadata(self):
+        package = json.loads((ROOT / "desktop" / "package.json").read_text(encoding="utf-8"))
+        build = package["build"]
+        background = ROOT / "desktop" / build["dmg"]["background"]
+
+        self.assertTrue(background.is_file(), background)
+        self.assertIsInstance(package["author"], dict)
+        self.assertTrue(package["author"].get("email"))
+        self.assertTrue(package.get("homepage"))
+        self.assertTrue(build["linux"].get("maintainer"))
 
     def test_tag_validator_accepts_matching_tag_and_rejects_mismatch(self):
         script = ROOT / ".github" / "scripts" / "verify_release_tag.py"
