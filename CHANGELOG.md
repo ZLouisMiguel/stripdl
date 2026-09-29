@@ -4,14 +4,21 @@ All notable changes to this project are documented here.
 
 ## [Unreleased]
 
-Desktop app rewrite: the renderer now uses React + Vite under `desktop/renderer/`, built via [electron-vite](https://electron-vite.org/). The Python CLI and on-disk folder structure remain unchanged; the `window.strip.*` IPC surface has gained guarded file operations and atomic progress persistence.
+_No unreleased changes yet._
 
-- **feat:** Library, Series detail, Reader, Settings, and the Download tray are now React components/views instead of hand-written HTML + vanilla JS, backed by dedicated hooks and context providers (`useLibrary`, `useConfig`, `DownloadTrayContext`, `ToastContext`, `ConfirmContext`).
-- **feat:** Per-series auto-download scheduling (subscribe a series to specific weekdays; a background check downloads new chapters automatically while the app is open, with native OS notifications and in-app toasts) — see `desktop/main/scheduler.js`.
-- **fix:** Local images (covers, chapter pages) are now served through a custom `strip-file://` protocol instead of `file://`, which Chromium blocks from loading when the page itself is served over `http://` (as the renderer is during development via Vite's dev server). This also fixes a Windows-specific bug where an earlier `strip-file://` URL format silently dropped the drive letter, breaking every local image uniformly.
-- **fix:** The app would intermittently freeze ("Not Responding") during active downloads. Root cause: every raw per-page download-progress event triggered an immediate, synchronous React re-render across the whole app; progress events are now buffered and flushed in a single batched update per animation frame, and per-job log/chapter tracking state is capped so long downloads of large series don't grow unboundedly.
-- **fix:** An unhandled `'error'` event on the spawned `stripdl` child process would have crashed the entire main process if the CLI were ever missing from `PATH` (or the bundled binary missing in a packaged build); now caught and reported through the normal progress/notification channels.
-- **fix:** Queued downloads (when `max_concurrent_jobs` is reached) now correctly replace their "queued" placeholder card with the real job card once a slot frees up, instead of leaving an orphaned duplicate card behind.
+## v0.4.0
+
+- **feat:** Rebuilt the Electron reader renderer with React, Vite, dedicated views, hooks, contexts, and a persistent download tray.
+- **feat:** Added per-series weekly auto-download scheduling with native notifications and in-app status updates.
+- **feat:** Added reader zoom controls, layout-aware zoom behavior, chapter navigation, lazy page virtualization, and next-chapter preloading.
+- **feat:** Added parsers for Asura Scans, Comix, WeebCentral, and MangaKakalot, plus improved Webtoon URL and cover handling.
+- **feat:** Improved download progress reporting with chapter-aware status, batched renderer updates, and bounded job logs for long downloads.
+- **fix:** Added secure local image serving through the `strip-file://` protocol and tightened Electron library path/file access checks.
+- **fix:** Made failed downloads resumable and surfaced actionable chapter, pagination, process, and lock errors instead of reporting false completion.
+- **fix:** Preserved fractional chapter names and corrected chapter ordering, cache handling, and overwrite configuration across the CLI and reader.
+- **feat:** Added branded Windows, macOS, and Linux installer assets and cross-platform release packaging for the CLI and Electron reader.
+- **ci:** Added contributor checks and automated versioned release workflows for all supported platforms and architectures.
+- **docs:** Restructured the project into `core/` and `desktop/`, refreshed the documentation, and documented branded release builds.
 
 ## v0.3.2
 

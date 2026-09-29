@@ -29,6 +29,9 @@ class ReleaseWorkflowTests(unittest.TestCase):
         publish_job = workflow.split("\n  publish:\n", 1)[1]
         checkout = "    steps:\n      - name: Check out repository\n        uses: actions/checkout@v4"
         self.assertIn(checkout, publish_job)
+        self.assertIn("ref: ${{ github.event.repository.default_branch }}", publish_job)
+        self.assertIn("update_changelog.py", publish_job)
+        self.assertIn('git push origin "HEAD:$RELEASE_BRANCH"', publish_job)
         self.assertLess(
             publish_job.index("Check out repository"),
             publish_job.index("Download all artifacts"),
@@ -52,8 +55,9 @@ class ReleaseWorkflowTests(unittest.TestCase):
 
     def test_release_version_argument_is_shell_independent(self):
         workflow = WORKFLOW.read_text(encoding="utf-8")
-        self.assertIn('--version "${{ needs.validate.outputs.version }}"', workflow)
-        self.assertNotIn('--version "$RELEASE_VERSION"', workflow)
+        package_workflow = workflow.split("\n  publish:\n", 1)[0]
+        self.assertIn('--version "${{ needs.validate.outputs.version }}"', package_workflow)
+        self.assertNotIn('--version "$RELEASE_VERSION"', package_workflow)
 
     def test_linux_arm64_uses_native_cli_and_x64_packager(self):
         workflow = WORKFLOW.read_text(encoding="utf-8")
