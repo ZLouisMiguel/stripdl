@@ -19,6 +19,7 @@ env/
 desktop/node_modules/
 desktop/dist/
 desktop/out/
+desktop/release/
 
 # Strip data (downloads)
 strip-data/

@@ -223,6 +223,8 @@ function getStripCliPath() {
 //  IPC — Config
 // ──────────────────────────────────────────────────────────────────
 
+ipcMain.handle("app:version", () => app.getVersion());
+
 ipcMain.handle("config:get", () => appConfig);
 
 ipcMain.handle("config:set", (_, updates) => {

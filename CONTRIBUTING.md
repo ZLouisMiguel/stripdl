@@ -83,6 +83,37 @@ npm run build       # verifies production main, preload, and renderer bundles
 
 The renderer is built with React and electron-vite. Edit the files under `desktop/renderer/`; the development server reloads renderer changes automatically.
 
+### Continuous integration and releases
+
+Every branch push and pull request runs the Python suite, Electron suite, production bundle build, branded asset verification, and a PyInstaller CLI smoke build on Ubuntu, Windows, and macOS. Run the same checks locally before opening a pull request:
+
+```bash
+python -m unittest discover -s core/tests -t core -v
+npm test --prefix desktop
+npm run build --prefix desktop
+python scripts/generate_release_assets.py
+python scripts/verify_release_assets.py
+python build_cli.py
+```
+
+The shared project version is stored in `VERSION`. Synchronize and validate it with:
+
+```bash
+python scripts/sync_version.py --version 0.4.0
+python scripts/sync_version.py --check
+```
+
+To build the branded reader locally, first generate the shared installer assets and then use the platform-specific package script:
+
+```bash
+python scripts/generate_release_assets.py
+npm run build:win --prefix desktop    # Windows NSIS installer
+npm run build:mac --prefix desktop    # macOS DMG
+npm run build:linux --prefix desktop  # Linux AppImage and .deb
+```
+
+The release workflow runs the equivalent builds for each supported OS and architecture. Push a matching `vMAJOR.MINOR.PATCH` tag after updating `VERSION` to publish a GitHub Release with standalone `stripdl` CLI archives and branded Strip Reader installers for Windows, macOS, and Linux. A manual workflow dispatch can be used to validate a tag before publishing. Do not configure the comic download directory in the installer; it remains an in-app user setting.
+
 ### Running the CLI against the live app
 
 The Electron app spawns `stripdl` from `PATH` during development (`npm run dev`) and from `resources/strip-cli/stripdl` in a packaged build. With `pip install -e .` active, development runs pick up local CLI changes automatically.

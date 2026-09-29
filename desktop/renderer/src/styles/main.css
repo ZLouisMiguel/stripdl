@@ -494,6 +494,19 @@ select {
   margin-bottom: 8px;
 }
 
+.about-brand {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.about-logo {
+  width: 42px;
+  height: 42px;
+  object-fit: contain;
+  flex: 0 0 auto;
+}
+
 .empty-state p {
   color: var(--text-secondary);
 }

@@ -1,7 +1,7 @@
 {
   "name": "strip-reader",
   "author": "ZLouisMiguel on github",
-  "version": "0.3.2",
+  "version": "0.4.0",
   "description": "Webtoon reader powered by strip",
   "main": "out/main/index.js",
   "scripts": {
@@ -19,7 +19,10 @@
   "build": {
     "appId": "com.strip.reader",
     "productName": "Strip",
-    "icon": "renderer/public/icon",
+    "directories": {
+      "buildResources": "installer",
+      "output": "release"
+    },
     "files": [
       "out/**/*",
       "node_modules/**/*"
@@ -35,13 +38,65 @@
     ],
     "mac": {
       "target": "dmg",
-      "category": "public.app-category.entertainment"
+      "icon": "assets/strip.icns",
+      "category": "public.app-category.entertainment",
+      "artifactName": "Strip-${version}-macos-${arch}.${ext}"
     },
     "win": {
-      "target": "nsis"
+      "target": "nsis",
+      "icon": "assets/strip.ico",
+      "artifactName": "Strip-${version}-windows-${arch}.${ext}"
     },
     "linux": {
-      "target": "AppImage"
+      "target": ["AppImage", "deb"],
+      "icon": "assets/icons",
+      "category": "Graphics",
+      "artifactName": "Strip-${version}-linux-${arch}.${ext}",
+      "executableName": "strip-reader",
+      "description": "Download and read comics offline with Strip.",
+      "synopsis": "Offline comic downloader and reader",
+      "desktop": {
+        "StartupNotify": "true",
+        "X-GNOME-UsesNotifications": "true"
+      }
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "Strip",
+      "installerIcon": "assets/strip.ico",
+      "uninstallerIcon": "assets/strip.ico",
+      "installerSidebar": "assets/windows/sidebar.bmp",
+      "installerHeader": "assets/windows/header.bmp",
+      "uninstallerSidebar": "assets/windows/uninstaller-sidebar.bmp",
+      "include": "assets/windows/installer.nsh"
+    },
+    "dmg": {
+      "background": "assets/macos/dmg-background.png",
+      "icon": "assets/strip.icns",
+      "window": {
+        "width": 900,
+        "height": 600
+      },
+      "contents": [
+        {
+          "x": 260,
+          "y": 300,
+          "type": "file"
+        },
+        {
+          "x": 640,
+          "y": 300,
+          "type": "link",
+          "path": "/Applications"
+        }
+      ],
+      "iconSize": 128,
+      "iconTextSize": 14,
+      "title": "Strip ${version}"
     }
   },
   "dependencies": {
