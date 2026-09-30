@@ -16,6 +16,8 @@ import {
 } from "../lib/readerWindow.mjs";
 import { toFileUrl } from "../lib/fileUrl.js";
 import { getReaderZoomStyle } from "../lib/readerZoom.mjs";
+import { getReaderContentState } from "../lib/readerState.mjs";
+import LoadingIndicator from "../components/LoadingIndicator.jsx";
 
 function PageImage({ src, index, eager, loaded, wrapperRef }) {
   const [imgLoaded, setImgLoaded] = useState(false);
@@ -58,6 +60,7 @@ export default function ReaderView({
 }) {
   const { config } = useConfig();
   const [pages, setPages] = useState([]);
+  const [loading, setLoading] = useState(Boolean(chapter));
   const [error, setError] = useState(null);
   const [visibleIndex, setVisibleIndex] = useState(0);
   const [showEndOverlay, setShowEndOverlay] = useState(false);
@@ -105,6 +108,8 @@ export default function ReaderView({
     let cancelled = false;
     if (!chapter) return;
 
+    setLoading(true);
+
     // Immediately scroll back to top when switching chapters so we never
     // start mid-page on a fresh chapter.
     if (containerRef.current) containerRef.current.scrollTop = 0;
@@ -124,13 +129,17 @@ export default function ReaderView({
       try {
         filePaths = await window.strip.chapter.pages(chapter.directory);
       } catch (e) {
-        if (!cancelled) setError(e.message || String(e));
+        if (!cancelled) {
+          setError(e.message || String(e));
+          setLoading(false);
+        }
         return;
       }
       if (cancelled) return;
 
       const urls = filePaths.map((p) => toFileUrl(p));
       setPages(urls);
+      setLoading(false);
 
       let sp = scrollToPage;
       if (!sp) {
@@ -376,6 +385,11 @@ export default function ReaderView({
   const idx = series.chapters.findIndex((c) => c.number === chapter.number);
   const hasPrev = idx > 0;
   const hasNext = idx !== -1 && idx < series.chapters.length - 1;
+  const contentState = getReaderContentState({
+    loading,
+    error,
+    pageCount: pages.length,
+  });
 
   return (
     <section id="view-reader" className="view reader-view active">
@@ -469,12 +483,15 @@ export default function ReaderView({
             ...getReaderZoomStyle(zoom),
           }}
         >
-          {error && (
+          {contentState === "loading" && (
+            <LoadingIndicator label="Loading chapter pages…" />
+          )}
+          {contentState === "error" && (
             <div className="reader-page-error">
               Could not load pages: {error}
             </div>
           )}
-          {!error && pages.length === 0 && (
+          {contentState === "empty" && (
             <div className="reader-page-error">
               No pages found in this chapter.
             </div>

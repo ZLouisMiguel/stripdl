@@ -6,6 +6,7 @@ import { useToast } from "../context/ToastContext.jsx";
 import { useConfirm } from "../context/ConfirmContext.jsx";
 import { useDownloadTray } from "../context/DownloadTrayContext.jsx";
 import SeriesCard from "../components/SeriesCard.jsx";
+import LoadingIndicator from "../components/LoadingIndicator.jsx";
 
 export default function LibraryView({ onOpenSeries, onContinue }) {
   const { library, loading, error, refresh, removeSeries } = useLibrary();
@@ -183,8 +184,7 @@ export default function LibraryView({ onOpenSeries, onContinue }) {
       <div className="series-grid">
         {loading && (
           <div className="empty-state">
-            <div className="empty-icon">◈</div>
-            <p style={{ color: "var(--text-muted)" }}>Loading…</p>
+            <LoadingIndicator label="Loading library…" />
           </div>
         )}
 

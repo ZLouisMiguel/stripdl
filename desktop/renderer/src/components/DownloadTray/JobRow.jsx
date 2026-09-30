@@ -126,7 +126,11 @@ export default function JobRow({ job, onCancel, onDismiss }) {
             <div
               key={i}
               style={
-                line.type === "error" ? { color: "var(--danger)" } : undefined
+                line.type === "error"
+                  ? { color: "var(--danger)" }
+                  : line.type === "warning"
+                    ? { color: "var(--warning, #b7791f)" }
+                    : undefined
               }
             >
               {line.msg}

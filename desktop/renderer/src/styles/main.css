@@ -32,6 +32,7 @@
   --accent: var(--steel);
   --accent-hover: var(--steel-dark);
   --danger: #c0392b;
+  --warning: #b7791f;
   --success: #27ae60;
 
   /* Radius */
@@ -513,6 +514,28 @@ select {
 .empty-state .muted {
   color: var(--text-muted);
   font-size: 13px;
+}
+
+.loading-state {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  color: var(--text-muted);
+  min-height: 48px;
+}
+
+.loading-spinner {
+  width: 18px;
+  height: 18px;
+  border: 2px solid var(--border);
+  border-top-color: var(--steel);
+  border-radius: 50%;
+  animation: loading-spin 0.8s linear infinite;
+}
+
+@keyframes loading-spin {
+  to { transform: rotate(360deg); }
 }
 
 /* ── Series detail ───────────────────────────────────────── */
