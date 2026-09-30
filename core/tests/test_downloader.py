@@ -93,6 +93,48 @@ class StreamingTests(unittest.TestCase):
         self.assertLess(events.index(("started", 1)), events.index("next-page"))
 
 
+class OptionalMetadataWarningTests(unittest.TestCase):
+    def test_optional_metadata_warning_does_not_fail_download(self):
+        parser = type("Parser", (), {
+            "iter_chapter_list": lambda self, url: iter([
+                ChapterInfo(1, "One", "url-1"),
+            ]),
+            "get_image_headers": lambda self: {},
+        })()
+        config_values = {
+            "verify_integrity": False,
+            "max_concurrent_chapters": 1,
+            "overwrite": False,
+        }
+        warnings = []
+
+        with tempfile.TemporaryDirectory() as tmp, \
+             patch("strip.downloader.config.get", side_effect=lambda key, default=None: config_values.get(key, default)), \
+             patch("strip.downloader._download_cover"), \
+             patch("strip.downloader.download_chapter"), \
+             patch("strip.downloader._emit") as emit:
+            series_dir = Path(tmp) / "Series"
+            series_dir.mkdir()
+            result = _do_download(
+                parser,
+                "url",
+                SeriesInfo("Series", "", "", "", "url"),
+                series_dir,
+                None,
+                None,
+                True,
+                None,
+                warning_cb=warnings.append,
+            )
+
+        self.assertEqual(result.name, "Series")
+        self.assertTrue(any("author" in warning.lower() for warning in warnings))
+        self.assertTrue(any(
+            call.args[0].get("status") == "warning"
+            for call in emit.call_args_list
+        ))
+
+
 class BusySeriesTests(unittest.TestCase):
     def test_json_download_raises_when_series_lock_is_busy(self):
         parser = type("Parser", (), {

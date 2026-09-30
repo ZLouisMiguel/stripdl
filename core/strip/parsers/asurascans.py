@@ -99,7 +99,11 @@ class AsuraScansParser(SiteParser):
     def _get_soup(self, url: str) -> BeautifulSoup:
         response = self.session.get(url, timeout=_TIMEOUT)
         response.raise_for_status()
-        return BeautifulSoup(response.text, "html.parser")
+        # Asura currently omits a charset in Content-Type while returning
+        # UTF-8 HTML. Parsing response.text makes requests default to
+        # ISO-8859-1 and corrupts non-Latin metadata before BeautifulSoup sees
+        # it. Let BeautifulSoup inspect the original bytes instead.
+        return BeautifulSoup(response.content, "html.parser")
 
     @staticmethod
     def _island_props(soup: BeautifulSoup, component_name: str) -> Dict[str, Any]:

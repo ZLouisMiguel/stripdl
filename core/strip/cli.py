@@ -23,15 +23,23 @@ from rich.progress import (
     Progress, SpinnerColumn, BarColumn, TextColumn, TaskID,
 )
 from rich import box
+from rich.markup import escape
 
 from strip.config import config
 from strip import __version__
+from strip.diagnostics import safe_terminal_text
 from strip.parsers import get_parser
 from strip.parsers.base import ChapterInfo
 from strip.downloader import download_series, ChapterProgress, DownloadFailure
 from strip.library import scan_library
 
 console = Console()
+
+
+def terminal_text(value) -> str:
+    """Prepare parser/user text for Rich without mutating stored metadata."""
+    encoding = getattr(getattr(console, "file", None), "encoding", None)
+    return escape(safe_terminal_text(value, encoding=encoding))
 
 def format_chapter_number(number: float) -> str:
     value = float(number)
@@ -40,7 +48,7 @@ def format_chapter_number(number: float) -> str:
 
 def format_terminal_chapter_label(number: float, title: str) -> str:
     """Return a compact chapter label for the interactive progress view."""
-    return f"Ch {format_chapter_number(number)} · {title}"
+    return f"Ch {format_chapter_number(number)} · {terminal_text(title)}"
 
 
 class _TerminalProgressState:
@@ -293,7 +301,7 @@ def download(
 
     # ── Interactive Rich CLI mode ────────────────────────────────────
     console.print(Panel.fit(
-        f"[bold cyan]stripdl[/bold cyan] – [dim]{url}[/dim]",
+        f"[bold cyan]stripdl[/bold cyan] – [dim]{terminal_text(url)}[/dim]",
         border_style="cyan",
     ))
 
@@ -418,21 +426,28 @@ def download(
         _wait_animated(si_done, progress, si_task, "Fetching series info…")
 
         if si_error[0]:
-            console.print(f"\n[red]Failed to fetch series info:[/red] {si_error[0]}")
+            console.print(
+                f"\n[red]Failed to fetch series info:[/red] {terminal_text(si_error[0])}")
             watchdog.stop(); sys.exit(1)
 
         series_info = si_result[0]
         progress.update(si_task,
-            description=f"[bold]{series_info.title}[/bold] by {series_info.author}",
+            description=(
+                f"[bold]{terminal_text(series_info.title)}[/bold] by "
+                f"{terminal_text(series_info.author or 'Unknown author')}"),
             total=1, completed=1, status="")
 
         max_ch = config.get("max_concurrent_chapters", 3)
         console.print(
-            f"\n  [cyan]◈[/cyan] [bold]{series_info.title}[/bold]  "
-            f"[dim]{series_info.author}[/dim]\n"
+            f"\n  [cyan]◈[/cyan] [bold]{terminal_text(series_info.title)}[/bold]  "
+            f"[dim]{terminal_text(series_info.author or 'Unknown author')}[/dim]\n"
             f"  [dim]fetching chapters & downloading  ·  {max_ch} concurrent  ·  "
-            f"saving to {config.download_dir}[/dim]\n"
+            f"saving to {terminal_text(config.download_dir)}[/dim]\n"
         )
+
+        def on_warning(message):
+            progress.console.print(
+                f"[yellow]⚠ Warning:[/yellow] {terminal_text(message)}")
 
         # Phase 2 + 3: fetch chapter list and download are now pipelined inside
         # download_series() — it starts downloading the first chapters while later
@@ -449,17 +464,21 @@ def download(
                 specific_chapters=specific_chapters,
                 json_progress=False,
                 progress_cb=on_progress,
+                series_info=series_info,
+                warning_cb=on_warning,
             )
         except RuntimeError as e:
-            console.print(f"\n[red bold]✗ {e}[/red bold]")
+            console.print(f"\n[red bold]✗ {terminal_text(e)}[/red bold]")
             watchdog.stop(); sys.exit(1)
         except Exception as e:
-            console.print(f"\n[red]Download failed:[/red] {e}")
+            console.print(f"\n[red]Download failed:[/red] {terminal_text(e)}")
             watchdog.stop(); sys.exit(1)
 
         watchdog.stop()
 
-    console.print(f"\n[bold green]✓ Done![/bold green]  {series_dir}\n")
+    console.print(
+        f"\n[bold green]✓ Download complete[/bold green]  "
+        f"{terminal_text(series_dir)}\n")
 
 
 # ────────────────────────────────────────────────────────────────────

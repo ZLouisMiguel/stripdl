@@ -6,7 +6,8 @@ from click.testing import CliRunner
 
 from strip.cli import cli, format_chapter_number
 from strip.downloader import _passes_filter
-from strip.parsers.base import ChapterInfo
+from strip.diagnostics import optional_metadata_warnings, safe_terminal_text
+from strip.parsers.base import ChapterInfo, SeriesInfo
 
 
 class HalfChapterTests(unittest.TestCase):
@@ -69,3 +70,18 @@ class TerminalProgressTests(unittest.TestCase):
 
         self.assertEqual(state.total, 1)
         self.assertEqual(state.status_label(), "0/1 done")
+
+
+class OptionalMetadataTests(unittest.TestCase):
+    def test_safe_terminal_text_replaces_unencodable_controls(self):
+        rendered = safe_terminal_text("Mintaka Kim,\x9d", encoding="cp1252")
+
+        self.assertEqual(rendered, "Mintaka Kim,")
+        self.assertNotIn("\x9d", rendered)
+
+    def test_missing_author_is_reported_as_a_warning(self):
+        info = SeriesInfo("Series", "", "", "", "https://example.test/series")
+
+        warnings = optional_metadata_warnings(info)
+
+        self.assertTrue(any("author" in warning.lower() for warning in warnings))

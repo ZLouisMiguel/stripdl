@@ -64,6 +64,7 @@ from urllib3.util.retry import Retry
 from PIL import Image
 
 from strip.config import config
+from strip.diagnostics import optional_metadata_warnings
 from strip.parsers.base import ChapterInfo, SeriesInfo, SiteParser
 
 
@@ -434,17 +435,25 @@ def _missing_images(ch_dir, image_urls, chapter, verify):
 
 def _download_cover(cover_url, series_dir, headers):
     if not cover_url:
-        return
+        return None
     dest = series_dir / "cover.jpg"
     if dest.exists() and dest.stat().st_size > 0:
-        return
+        return None
     try:
         resp = _img_session.get(cover_url, headers=headers, timeout=(10, 30))
         resp.raise_for_status()
         img = Image.open(BytesIO(resp.content)).convert("RGB")
         img.save(dest, "JPEG", quality=90, optimize=True)
     except Exception:
-        pass
+        return "Cover image could not be downloaded; continuing without it."
+    return None
+
+
+def _emit_warning(json_progress, warning_cb, code, message):
+    if json_progress:
+        _emit({"status": "warning", "code": code, "message": message})
+    if warning_cb:
+        warning_cb(message)
 
 
 # ─────────────────────────────────────────────────────────────────────
@@ -566,6 +575,8 @@ def download_series(
     specific_chapters: Optional[List[float]] = None,
     json_progress:     bool                = False,
     progress_cb:       Optional[ProgressCallback] = None,
+    series_info:       Optional[SeriesInfo] = None,
+    warning_cb:        Optional[Callable[[str], None]] = None,
 ) -> Path:
     """
     Download a full series or filtered subset.
@@ -585,9 +596,10 @@ def download_series(
     if json_progress:
         _emit({"status": "fetching_info", "url": url})
 
-    series_info = _try_load_cached_series_info(canonical_url)
     if series_info is None:
-        series_info = parser.get_series_info(url)
+        series_info = _try_load_cached_series_info(canonical_url)
+        if series_info is None:
+            series_info = parser.get_series_info(url)
 
     if json_progress:
         _emit({"status": "series_info",
@@ -614,6 +626,7 @@ def download_series(
             series_info=series_info, series_dir=series_dir,
             chapter_range=chapter_range, specific_chapters=specific_chapters,
             json_progress=json_progress, progress_cb=progress_cb,
+            warning_cb=warning_cb,
         )
     finally:
         lock.release()
@@ -673,7 +686,8 @@ def _passes_filter(ch, chapter_range, specific_chapters) -> bool:
 
 
 def _do_download(parser, url, series_info, series_dir,
-                 chapter_range, specific_chapters, json_progress, progress_cb):
+                 chapter_range, specific_chapters, json_progress, progress_cb,
+                 warning_cb=None):
     verify = config.get("verify_integrity", False)
 
     # Write / refresh series metadata
@@ -685,7 +699,13 @@ def _do_download(parser, url, series_info, series_dir,
             "status": series_info.status, "last_fetched": time.time(),
         }, f, indent=2, ensure_ascii=False)
 
-    _download_cover(series_info.cover_url, series_dir, parser.get_image_headers())
+    for warning in optional_metadata_warnings(series_info):
+        _emit_warning(json_progress, warning_cb, "metadata_unavailable", warning)
+
+    cover_warning = _download_cover(
+        series_info.cover_url, series_dir, parser.get_image_headers())
+    if cover_warning:
+        _emit_warning(json_progress, warning_cb, "cover_unavailable", cover_warning)
 
     if json_progress:
         _emit({"status": "fetching_chapters"})
