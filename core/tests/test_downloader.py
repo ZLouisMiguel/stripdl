@@ -135,6 +135,43 @@ class OptionalMetadataWarningTests(unittest.TestCase):
         ))
 
 
+class MetadataEncodingTests(unittest.TestCase):
+    def test_series_metadata_is_written_as_utf8(self):
+        parser = type("Parser", (), {
+            "iter_chapter_list": lambda self, url: iter([
+                ChapterInfo(1, "One", "url-1"),
+            ]),
+            "get_image_headers": lambda self: {},
+        })()
+        config_values = {
+            "verify_integrity": False,
+            "max_concurrent_chapters": 1,
+            "overwrite": False,
+        }
+
+        with tempfile.TemporaryDirectory() as tmp, \
+             patch("strip.downloader.config.get", side_effect=lambda key, default=None: config_values.get(key, default)), \
+             patch("strip.downloader._download_cover"), \
+             patch("strip.downloader.download_chapter") as download_chapter_mock:
+            series_dir = Path(tmp) / "Series"
+            series_dir.mkdir()
+            _do_download(
+                parser,
+                "url",
+                SeriesInfo("Series", "Mintaka Kim,망령풍뎅이", "", "", "url"),
+                series_dir,
+                None,
+                None,
+                False,
+                None,
+            )
+
+            metadata = (series_dir / "metadata.json").read_text(encoding="utf-8")
+
+        self.assertIn("Mintaka Kim,망령풍뎅이", metadata)
+        download_chapter_mock.assert_called_once()
+
+
 class BusySeriesTests(unittest.TestCase):
     def test_json_download_raises_when_series_lock_is_busy(self):
         parser = type("Parser", (), {
