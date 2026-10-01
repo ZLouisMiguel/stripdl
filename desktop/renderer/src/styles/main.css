@@ -775,6 +775,12 @@ select {
   pointer-events: none;
 }
 
+.reader-zoom-level:disabled {
+  opacity: 0.55;
+  cursor: default;
+  pointer-events: none;
+}
+
 .reader-zoom-level {
   min-width: 48px;
   height: 28px;

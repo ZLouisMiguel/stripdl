@@ -5,7 +5,7 @@
 // next-chapter preload, resume-to-saved-page on open, and keyboard
 // shortcuts.
 
-import React, { useCallback, useEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useConfig } from "../hooks/useConfig.js";
 import { updateLastReadPosition } from "../lib/readingProgress.js";
 import { createProgressDebouncer } from "../lib/progressDebouncer.mjs";
@@ -15,7 +15,11 @@ import {
   getWindowSpacerHeights,
 } from "../lib/readerWindow.mjs";
 import { toFileUrl } from "../lib/fileUrl.js";
-import { getReaderZoomStyle } from "../lib/readerZoom.mjs";
+import {
+  applyZoomLock,
+  getAnchoredScrollTop,
+  getReaderZoomStyle,
+} from "../lib/readerZoom.mjs";
 import { getReaderContentState } from "../lib/readerState.mjs";
 import LoadingIndicator from "../components/LoadingIndicator.jsx";
 
@@ -68,14 +72,11 @@ export default function ReaderView({
   const [startPage, setStartPage] = useState(0);
   const [pageHeights, setPageHeights] = useState([]);
   const [zoom, setZoom] = useState(1);
+  const [zoomLocked, setZoomLocked] = useState(false);
 
   const ZOOM_MIN = 0.5;
   const ZOOM_MAX = 3;
   const ZOOM_STEP = 0.25;
-
-  function zoomIn()  { setZoom((z) => Math.min(ZOOM_MAX, +(z + ZOOM_STEP).toFixed(2))); }
-  function zoomOut() { setZoom((z) => Math.max(ZOOM_MIN, +(z - ZOOM_STEP).toFixed(2))); }
-  function zoomReset() { setZoom(1); }
 
   const containerRef = useRef(null);
   const pageRefs = useRef([]);
@@ -83,6 +84,52 @@ export default function ReaderView({
   const intersectingPagesRef = useRef(new Map());
   const visibleIndexRef = useRef(visibleIndex);
   visibleIndexRef.current = visibleIndex;
+  const zoomRef = useRef(zoom);
+  zoomRef.current = zoom;
+  const zoomLockedRef = useRef(zoomLocked);
+  zoomLockedRef.current = zoomLocked;
+  const zoomAnchorRef = useRef(null);
+
+  function captureZoomAnchor() {
+    const container = containerRef.current;
+    const page = pageRefs.current[visibleIndexRef.current];
+    if (!container || !page) return;
+    zoomAnchorRef.current = {
+      pageIndex: visibleIndexRef.current,
+      top: page.getBoundingClientRect().top - container.getBoundingClientRect().top,
+    };
+  }
+
+  function setZoomLevel(nextZoom) {
+    if (zoomLockedRef.current) return;
+    const current = zoomRef.current;
+    const next = applyZoomLock(
+      current,
+      Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, +nextZoom.toFixed(3))),
+      zoomLockedRef.current,
+    );
+    if (next === current) return;
+    captureZoomAnchor();
+    zoomRef.current = next;
+    setZoom(next);
+  }
+
+  function zoomIn()  { setZoomLevel(zoomRef.current + ZOOM_STEP); }
+  function zoomOut() { setZoomLevel(zoomRef.current - ZOOM_STEP); }
+  function zoomReset() { setZoomLevel(1); }
+
+  useLayoutEffect(() => {
+    const anchor = zoomAnchorRef.current;
+    const container = containerRef.current;
+    const page = anchor && pageRefs.current[anchor.pageIndex];
+    if (!anchor || !container || !page) {
+      zoomAnchorRef.current = null;
+      return;
+    }
+    const afterTop = page.getBoundingClientRect().top - container.getBoundingClientRect().top;
+    container.scrollTop = getAnchoredScrollTop(container.scrollTop, anchor.top, afterTop);
+    zoomAnchorRef.current = null;
+  }, [zoom]);
   const preloadTriggeredRef = useRef(false);
   const progressDebouncerRef = useRef(null);
   if (!progressDebouncerRef.current) {
@@ -309,10 +356,7 @@ export default function ReaderView({
       // deltaY < 0  → pinch-out (zoom in)   deltaY > 0 → pinch-in (zoom out)
       // Scale the delta so small trackpad movements feel natural.
       const delta = e.deltaY * -0.005;
-      setZoom((z) => {
-        const next = z + delta;
-        return Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, +next.toFixed(3)));
-      });
+      setZoomLevel(zoomRef.current + delta);
     }
 
     // Must be non-passive so we can call preventDefault()
@@ -450,7 +494,7 @@ export default function ReaderView({
               id="zoom-out-btn"
               className="btn btn-ghost icon-btn reader-zoom-btn"
               title="Zoom out (−)"
-              disabled={zoom <= ZOOM_MIN}
+              disabled={zoomLocked || zoom <= ZOOM_MIN}
               onClick={zoomOut}
             >
               −
@@ -459,6 +503,7 @@ export default function ReaderView({
               id="zoom-reset-btn"
               className="btn btn-ghost reader-zoom-level"
               title="Reset zoom (0)"
+              disabled={zoomLocked}
               onClick={zoomReset}
             >
               {Math.round(zoom * 100)}%
@@ -467,10 +512,20 @@ export default function ReaderView({
               id="zoom-in-btn"
               className="btn btn-ghost icon-btn reader-zoom-btn"
               title="Zoom in (=)"
-              disabled={zoom >= ZOOM_MAX}
+              disabled={zoomLocked || zoom >= ZOOM_MAX}
               onClick={zoomIn}
             >
               +
+            </button>
+            <button
+              id="zoom-lock-btn"
+              className="btn btn-ghost icon-btn reader-zoom-btn"
+              title={zoomLocked ? "Unlock zoom" : "Lock zoom"}
+              aria-label={zoomLocked ? "Unlock zoom" : "Lock zoom"}
+              aria-pressed={zoomLocked}
+              onClick={() => setZoomLocked((locked) => !locked)}
+            >
+              {zoomLocked ? "🔒" : "🔓"}
             </button>
           </div>
         </div>
