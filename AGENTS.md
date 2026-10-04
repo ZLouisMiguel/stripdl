@@ -41,16 +41,16 @@ changes.
 ```bash
 git switch dev
 git pull --ff-only origin dev
-git switch -c codex/fix-short-description
+git switch -c fix-short-description
 # or
-git switch -c codex/feature-short-description
+git switch -c feature-short-description
 ```
 
-Use `codex/fix-...` for bug fixes, regressions, reliability work, and corrective
-documentation. Use `codex/feature-...` for new user-facing behavior. Use another
-descriptive `codex/` prefix only when the work is clearly neither a fix nor a feature.
-Branch from the latest `dev`, and keep one coherent objective per branch and pull
-request.
+Use `fix-...` for bug fixes, regressions, reliability work, and corrective
+documentation. Use `feature-...` for new user-facing behavior. Use another descriptive
+prefix, such as `docs-...` or `chore-...`, when the work is clearly neither a fix nor a
+feature. Branch from the latest `dev`, and keep one coherent objective per branch and
+pull request.
 
 ### Fix workflow
 
@@ -135,7 +135,7 @@ be using, and do not force-push shared branches.
 Push the topic branch and open a pull request targeting `dev`:
 
 ```bash
-git push -u origin codex/fix-short-description
+git push -u origin fix-short-description
 ```
 
 Every PR should include:
