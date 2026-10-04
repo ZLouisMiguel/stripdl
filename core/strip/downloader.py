@@ -235,6 +235,43 @@ class DownloadFailure(RuntimeError):
         ))
 
 
+def _record_failed_download(url: str, failures, outcome: str, root=None):
+    """Persist failed chapter URLs without masking the original download error."""
+    target_root = Path(root) if root is not None else config.download_dir
+    record_path = target_root / ".failed-downloads.json"
+    try:
+        target_root.mkdir(parents=True, exist_ok=True)
+        try:
+            records = json.loads(record_path.read_text(encoding="utf-8"))
+        except (FileNotFoundError, json.JSONDecodeError, OSError, UnicodeDecodeError):
+            records = []
+        if not isinstance(records, list):
+            records = []
+
+        records = [record for record in records if record.get("url") != url]
+        records.append({
+            "url": url,
+            "outcome": outcome,
+            "updated_at": time.time(),
+            "failures": [
+                {"chapter": failure.number, "message": failure.message}
+                for failure in failures
+            ],
+        })
+
+        temp_path = record_path.with_suffix(".json.tmp")
+        temp_path.write_text(
+            json.dumps(records, indent=2, ensure_ascii=False),
+            encoding="utf-8",
+        )
+        temp_path.replace(record_path)
+    except Exception:
+        # Failure persistence is best-effort and must never hide the download
+        # failure that the caller needs to see.
+        return False
+    return True
+
+
 # ─────────────────────────────────────────────────────────────────────
 #  Per-series file lock
 # ─────────────────────────────────────────────────────────────────────
@@ -632,6 +669,9 @@ def download_series(
             json_progress=json_progress, progress_cb=progress_cb,
             warning_cb=warning_cb,
         )
+    except DownloadFailure as exc:
+        _record_failed_download(canonical_url, exc.failures, exc.outcome)
+        raise
     finally:
         lock.release()
 

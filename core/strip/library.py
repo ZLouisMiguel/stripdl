@@ -85,7 +85,7 @@ def scan_library(download_dir: Optional[Path] = None) -> List[LocalSeries]:
         try:
             with open(meta_file, encoding="utf-8") as f:
                 meta = json.load(f)
-        except (json.JSONDecodeError, OSError):
+        except (json.JSONDecodeError, UnicodeDecodeError, OSError):
             meta = {}
 
         cover = series_dir / "cover.jpg"

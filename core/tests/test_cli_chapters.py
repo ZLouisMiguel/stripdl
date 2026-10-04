@@ -73,6 +73,28 @@ class TerminalProgressTests(unittest.TestCase):
 
 
 class OptionalMetadataTests(unittest.TestCase):
+    def test_cli_reconfigures_stdio_for_utf8_output(self):
+        class Stream:
+            encoding = "cp1252"
+
+            def __init__(self):
+                self.calls = []
+
+            def reconfigure(self, **kwargs):
+                self.calls.append(kwargs)
+
+        stdout = Stream()
+        stderr = Stream()
+        with patch.object(cli_module.sys, "stdout", stdout), \
+             patch.object(cli_module.sys, "stderr", stderr):
+            cli_module._configure_stdio()
+
+        self.assertEqual(stdout.calls, [{"encoding": "utf-8", "errors": "replace"}])
+        self.assertEqual(stderr.calls, [{"encoding": "utf-8", "errors": "replace"}])
+
+    def test_root_help_banner_is_cp1252_safe(self):
+        cli_module.cli.__doc__.encode("cp1252")
+
     def test_safe_terminal_text_replaces_unencodable_controls(self):
         rendered = safe_terminal_text("Mintaka Kim,\x9d", encoding="cp1252")
 

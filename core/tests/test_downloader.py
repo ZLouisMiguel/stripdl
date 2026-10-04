@@ -1,10 +1,19 @@
+import json
 import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
 import threading
 
-from strip.downloader import DownloadFailure, ImageDownloadError, _do_download, download_chapter, download_series
+import strip.downloader as downloader
+from strip.downloader import (
+    ChapterFailure,
+    DownloadFailure,
+    ImageDownloadError,
+    _do_download,
+    download_chapter,
+    download_series,
+)
 from strip.parsers.base import ChapterInfo, SeriesInfo
 
 
@@ -189,3 +198,23 @@ class BusySeriesTests(unittest.TestCase):
             call.args[0].get("status") == "error"
             for call in emit.call_args_list
         ))
+
+
+class FailedDownloadRecordTests(unittest.TestCase):
+    def test_failed_download_links_are_saved_for_later_retry(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            downloader._record_failed_download(
+                "https://example.test/series",
+                [ChapterFailure(2, "timeout")],
+                "partial",
+                root=Path(tmp),
+            )
+
+            record_path = Path(tmp) / ".failed-downloads.json"
+            records = json.loads(record_path.read_text(encoding="utf-8"))
+
+        self.assertEqual(len(records), 1)
+        self.assertEqual(records[0]["url"], "https://example.test/series")
+        self.assertEqual(records[0]["outcome"], "partial")
+        self.assertEqual(records[0]["failures"][0]["chapter"], 2)
+        self.assertEqual(records[0]["failures"][0]["message"], "timeout")
