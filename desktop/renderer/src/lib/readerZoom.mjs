@@ -7,3 +7,11 @@ export function getReaderZoomStyle(zoom) {
   const level = Number.isFinite(Number(zoom)) ? Number(zoom) : 1;
   return { zoom: level };
 }
+
+export function getAnchoredScrollTop(currentScrollTop, beforeTop, afterTop) {
+  return currentScrollTop + (afterTop - beforeTop);
+}
+
+export function applyZoomLock(currentZoom, nextZoom, locked) {
+  return locked ? currentZoom : nextZoom;
+}

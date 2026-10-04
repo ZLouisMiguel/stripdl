@@ -23,15 +23,37 @@ from rich.progress import (
     Progress, SpinnerColumn, BarColumn, TextColumn, TaskID,
 )
 from rich import box
+from rich.markup import escape
 
 from strip.config import config
 from strip import __version__
+from strip.diagnostics import safe_terminal_text
 from strip.parsers import get_parser
 from strip.parsers.base import ChapterInfo
 from strip.downloader import download_series, ChapterProgress, DownloadFailure
 from strip.library import scan_library
 
 console = Console()
+
+
+def _configure_stdio():
+    """Prefer UTF-8 output while remaining safe for redirected streams."""
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is None:
+            continue
+        try:
+            reconfigure(encoding="utf-8", errors="replace")
+        except (OSError, ValueError):
+            # Some embedded or test streams do not allow their encoding to
+            # change; terminal_text still sanitizes their display values.
+            continue
+
+
+def terminal_text(value) -> str:
+    """Prepare parser/user text for Rich without mutating stored metadata."""
+    encoding = getattr(getattr(console, "file", None), "encoding", None)
+    return escape(safe_terminal_text(value, encoding=encoding))
 
 def format_chapter_number(number: float) -> str:
     value = float(number)
@@ -40,7 +62,7 @@ def format_chapter_number(number: float) -> str:
 
 def format_terminal_chapter_label(number: float, title: str) -> str:
     """Return a compact chapter label for the interactive progress view."""
-    return f"Ch {format_chapter_number(number)} · {title}"
+    return f"Ch {format_chapter_number(number)} · {terminal_text(title)}"
 
 
 class _TerminalProgressState:
@@ -108,14 +130,9 @@ class _TerminalProgressState:
 def cli():
     """
     \b
-    ███████╗████████╗██████╗ ██╗██████╗
-    ██╔════╝╚══██╔══╝██╔══██╗██║██╔══██╗
-    ███████╗   ██║   ██████╔╝██║██████╔╝
-    ╚════██║   ██║   ██╔══██╗██║██╔═══╝
-    ███████║   ██║   ██║  ██║██║██║
-    ╚══════╝   ╚═╝   ╚═╝  ╚═╝╚═╝╚═╝
+    stripdl
 
-    Webtoon downloader & library manager — v2.
+    Webtoon downloader & library manager - v2.
     """
     pass
 
@@ -293,7 +310,7 @@ def download(
 
     # ── Interactive Rich CLI mode ────────────────────────────────────
     console.print(Panel.fit(
-        f"[bold cyan]stripdl[/bold cyan] – [dim]{url}[/dim]",
+        f"[bold cyan]stripdl[/bold cyan] – [dim]{terminal_text(url)}[/dim]",
         border_style="cyan",
     ))
 
@@ -418,21 +435,28 @@ def download(
         _wait_animated(si_done, progress, si_task, "Fetching series info…")
 
         if si_error[0]:
-            console.print(f"\n[red]Failed to fetch series info:[/red] {si_error[0]}")
+            console.print(
+                f"\n[red]Failed to fetch series info:[/red] {terminal_text(si_error[0])}")
             watchdog.stop(); sys.exit(1)
 
         series_info = si_result[0]
         progress.update(si_task,
-            description=f"[bold]{series_info.title}[/bold] by {series_info.author}",
+            description=(
+                f"[bold]{terminal_text(series_info.title)}[/bold] by "
+                f"{terminal_text(series_info.author or 'Unknown author')}"),
             total=1, completed=1, status="")
 
         max_ch = config.get("max_concurrent_chapters", 3)
         console.print(
-            f"\n  [cyan]◈[/cyan] [bold]{series_info.title}[/bold]  "
-            f"[dim]{series_info.author}[/dim]\n"
+            f"\n  [cyan]◈[/cyan] [bold]{terminal_text(series_info.title)}[/bold]  "
+            f"[dim]{terminal_text(series_info.author or 'Unknown author')}[/dim]\n"
             f"  [dim]fetching chapters & downloading  ·  {max_ch} concurrent  ·  "
-            f"saving to {config.download_dir}[/dim]\n"
+            f"saving to {terminal_text(config.download_dir)}[/dim]\n"
         )
+
+        def on_warning(message):
+            progress.console.print(
+                f"[yellow]⚠ Warning:[/yellow] {terminal_text(message)}")
 
         # Phase 2 + 3: fetch chapter list and download are now pipelined inside
         # download_series() — it starts downloading the first chapters while later
@@ -449,17 +473,21 @@ def download(
                 specific_chapters=specific_chapters,
                 json_progress=False,
                 progress_cb=on_progress,
+                series_info=series_info,
+                warning_cb=on_warning,
             )
         except RuntimeError as e:
-            console.print(f"\n[red bold]✗ {e}[/red bold]")
+            console.print(f"\n[red bold]✗ {terminal_text(e)}[/red bold]")
             watchdog.stop(); sys.exit(1)
         except Exception as e:
-            console.print(f"\n[red]Download failed:[/red] {e}")
+            console.print(f"\n[red]Download failed:[/red] {terminal_text(e)}")
             watchdog.stop(); sys.exit(1)
 
         watchdog.stop()
 
-    console.print(f"\n[bold green]✓ Done![/bold green]  {series_dir}\n")
+    console.print(
+        f"\n[bold green]✓ Download complete[/bold green]  "
+        f"{terminal_text(series_dir)}\n")
 
 
 # ────────────────────────────────────────────────────────────────────
@@ -473,18 +501,33 @@ def list_chapters(url: str):
     try:
         parser = get_parser(url)
     except ValueError as e:
-        console.print(f"[red]{e}[/red]"); sys.exit(1)
+        click.echo(f"Error: {terminal_text(e)}", err=True); sys.exit(1)
 
-    with console.status("Fetching series info…"):
-        info = parser.get_series_info(url)
-    with console.status("Fetching chapter list…"):
-        chapters = parser.get_chapter_list(url)
+    try:
+        with console.status("Fetching series info…"):
+            info = parser.get_series_info(url)
+    except Exception as e:
+        click.echo(
+            f"Failed to fetch series info: {terminal_text(e)}",
+            err=True,
+        )
+        sys.exit(1)
+
+    try:
+        with console.status("Fetching chapter list…"):
+            chapters = parser.get_chapter_list(url)
+    except Exception as e:
+        click.echo(
+            f"Failed to fetch chapter list: {terminal_text(e)}",
+            err=True,
+        )
+        sys.exit(1)
 
     console.print(Panel(
-        f"[bold]{info.title}[/bold]\n"
-        f"[dim]Author:[/dim] {info.author}\n"
-        f"[dim]Status:[/dim] {info.status or 'unknown'}\n"
-        f"[dim]Genre:[/dim]  {info.genre or '—'}",
+        f"[bold]{terminal_text(info.title)}[/bold]\n"
+        f"[dim]Author:[/dim] {terminal_text(info.author)}\n"
+        f"[dim]Status:[/dim] {terminal_text(info.status or 'unknown')}\n"
+        f"[dim]Genre:[/dim]  {terminal_text(info.genre or '—')}",
         title="Series Info", border_style="cyan",
     ))
     table = Table(box=box.SIMPLE_HEAD, show_edge=False)
@@ -492,7 +535,11 @@ def list_chapters(url: str):
     table.add_column("Title")
     table.add_column("Date", style="dim",  width=12)
     for ch in chapters:
-        table.add_row(format_chapter_number(ch.number), ch.title, ch.date)
+        table.add_row(
+            format_chapter_number(ch.number),
+            terminal_text(ch.title),
+            terminal_text(ch.date),
+        )
     console.print(table)
     console.print(f"\n[dim]Total: {len(chapters)} chapters[/dim]")
 
@@ -504,12 +551,16 @@ def list_chapters(url: str):
 @cli.command()
 def library():
     """Show all locally downloaded series."""
-    series_list = scan_library()
+    try:
+        series_list = scan_library()
+    except Exception as e:
+        click.echo(f"Failed to scan library: {terminal_text(e)}", err=True)
+        sys.exit(1)
     if not series_list:
         console.print(
             f"[yellow]Library is empty.[/yellow]\n"
             f"Download something: [bold]stripdl download <url>[/bold]\n"
-            f"Library location:   {config.download_dir}"
+            f"Library location:   {terminal_text(config.download_dir)}"
         )
         return
     table = Table(title="Local Library", box=box.ROUNDED, show_edge=True)
@@ -518,7 +569,12 @@ def library():
     table.add_column("Chapters", justify="right", style="cyan")
     table.add_column("Location", style="dim")
     for s in series_list:
-        table.add_row(s.title, s.author or "—", str(s.chapter_count), str(s.directory))
+        table.add_row(
+            terminal_text(s.title),
+            terminal_text(s.author or "—"),
+            terminal_text(s.chapter_count),
+            terminal_text(s.directory),
+        )
     console.print(table)
 
 
@@ -569,6 +625,7 @@ def config_cmd(set_kv: Optional[str], get_key: Optional[str], reset: bool):
 # ────────────────────────────────────────────────────────────────────
 
 def main():
+    _configure_stdio()
     cli()
 
 if __name__ == "__main__":

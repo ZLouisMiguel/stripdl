@@ -65,7 +65,7 @@ class Config:
     def _load(self):
         if _CONFIG_FILE.exists():
             try:
-                with open(_CONFIG_FILE) as f:
+                with open(_CONFIG_FILE, encoding="utf-8") as f:
                     self._data = json.load(f)
             except (json.JSONDecodeError, OSError):
                 self._data = {}
@@ -74,7 +74,7 @@ class Config:
 
     def save(self):
         _CONFIG_DIR.mkdir(parents=True, exist_ok=True)
-        with open(_CONFIG_FILE, "w") as f:
+        with open(_CONFIG_FILE, "w", encoding="utf-8") as f:
             json.dump(self._data, f, indent=2)
 
     # ------------------------------------------------------------------ access

@@ -6,7 +6,8 @@ from click.testing import CliRunner
 
 from strip.cli import cli, format_chapter_number
 from strip.downloader import _passes_filter
-from strip.parsers.base import ChapterInfo
+from strip.diagnostics import optional_metadata_warnings, safe_terminal_text
+from strip.parsers.base import ChapterInfo, SeriesInfo
 
 
 class HalfChapterTests(unittest.TestCase):
@@ -69,3 +70,40 @@ class TerminalProgressTests(unittest.TestCase):
 
         self.assertEqual(state.total, 1)
         self.assertEqual(state.status_label(), "0/1 done")
+
+
+class OptionalMetadataTests(unittest.TestCase):
+    def test_cli_reconfigures_stdio_for_utf8_output(self):
+        class Stream:
+            encoding = "cp1252"
+
+            def __init__(self):
+                self.calls = []
+
+            def reconfigure(self, **kwargs):
+                self.calls.append(kwargs)
+
+        stdout = Stream()
+        stderr = Stream()
+        with patch.object(cli_module.sys, "stdout", stdout), \
+             patch.object(cli_module.sys, "stderr", stderr):
+            cli_module._configure_stdio()
+
+        self.assertEqual(stdout.calls, [{"encoding": "utf-8", "errors": "replace"}])
+        self.assertEqual(stderr.calls, [{"encoding": "utf-8", "errors": "replace"}])
+
+    def test_root_help_banner_is_cp1252_safe(self):
+        cli_module.cli.__doc__.encode("cp1252")
+
+    def test_safe_terminal_text_replaces_unencodable_controls(self):
+        rendered = safe_terminal_text("Mintaka Kim,\x9d", encoding="cp1252")
+
+        self.assertEqual(rendered, "Mintaka Kim,")
+        self.assertNotIn("\x9d", rendered)
+
+    def test_missing_author_is_reported_as_a_warning(self):
+        info = SeriesInfo("Series", "", "", "", "https://example.test/series")
+
+        warnings = optional_metadata_warnings(info)
+
+        self.assertTrue(any("author" in warning.lower() for warning in warnings))

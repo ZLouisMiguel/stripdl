@@ -11,8 +11,9 @@ CHAPTER_URL = f"{SERIES_URL}/chapter/chapter-20"
 
 
 class FakeResponse:
-    def __init__(self, text):
+    def __init__(self, text, content=None):
         self.text = text
+        self.content = content if content is not None else text.encode("utf-8")
 
     def raise_for_status(self):
         return None
@@ -25,7 +26,8 @@ class FakeSession:
 
     def get(self, url, **kwargs):
         self.calls.append((url, kwargs))
-        return FakeResponse(self.pages[url])
+        page = self.pages[url]
+        return page if isinstance(page, FakeResponse) else FakeResponse(page)
 
 
 def wrapped(value):
@@ -49,7 +51,7 @@ def island(component, props):
     return f'<astro-island component-url="{component}" props="{encoded}"></astro-island>'
 
 
-def series_html(chapters):
+def series_html(chapters, artist="Sample Artist"):
     chapter_props = {"chapters": [1, [[0, item] for item in chapters]]}
     return f"""
     <html><head>
@@ -59,7 +61,7 @@ def series_html(chapters):
     </head><body>
       <h1>Sample Series</h1>
       <div><span>Status</span><span>ongoing</span></div>
-      <div><span>Artist</span><span>Sample Artist</span></div>
+      <div><span>Artist</span><span>{artist}</span></div>
       {island("/_astro/ChapterListReact.test.js", chapter_props)}
     </body></html>
     """
@@ -71,6 +73,21 @@ def chapter_html(page_urls):
 
 
 class AsuraScansParserTests(unittest.TestCase):
+    def test_asura_parser_decodes_utf8_bytes_without_charset(self):
+        artist = "Mintaka Kim,망령풍뎅이"
+        correct_html = series_html([], artist=artist)
+        raw_html = correct_html.encode("utf-8")
+        response_text = raw_html.decode("iso-8859-1")
+
+        parser = AsuraScansParser()
+        parser.session = FakeSession({
+            SERIES_URL: FakeResponse(response_text, content=raw_html),
+        })
+
+        info = parser.get_series_info(SERIES_URL)
+
+        self.assertEqual(info.author, artist)
+
     def test_supports_only_asura_https_hosts(self):
         self.assertTrue(AsuraScansParser.supports(SERIES_URL))
         self.assertTrue(AsuraScansParser.supports(SERIES_URL.replace("asurascans.com", "www.asurascans.com")))

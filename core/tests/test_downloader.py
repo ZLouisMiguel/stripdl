@@ -1,10 +1,19 @@
+import json
 import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
 import threading
 
-from strip.downloader import DownloadFailure, ImageDownloadError, _do_download, download_chapter, download_series
+import strip.downloader as downloader
+from strip.downloader import (
+    ChapterFailure,
+    DownloadFailure,
+    ImageDownloadError,
+    _do_download,
+    download_chapter,
+    download_series,
+)
 from strip.parsers.base import ChapterInfo, SeriesInfo
 
 
@@ -93,6 +102,85 @@ class StreamingTests(unittest.TestCase):
         self.assertLess(events.index(("started", 1)), events.index("next-page"))
 
 
+class OptionalMetadataWarningTests(unittest.TestCase):
+    def test_optional_metadata_warning_does_not_fail_download(self):
+        parser = type("Parser", (), {
+            "iter_chapter_list": lambda self, url: iter([
+                ChapterInfo(1, "One", "url-1"),
+            ]),
+            "get_image_headers": lambda self: {},
+        })()
+        config_values = {
+            "verify_integrity": False,
+            "max_concurrent_chapters": 1,
+            "overwrite": False,
+        }
+        warnings = []
+
+        with tempfile.TemporaryDirectory() as tmp, \
+             patch("strip.downloader.config.get", side_effect=lambda key, default=None: config_values.get(key, default)), \
+             patch("strip.downloader._download_cover"), \
+             patch("strip.downloader.download_chapter"), \
+             patch("strip.downloader._emit") as emit:
+            series_dir = Path(tmp) / "Series"
+            series_dir.mkdir()
+            result = _do_download(
+                parser,
+                "url",
+                SeriesInfo("Series", "", "", "", "url"),
+                series_dir,
+                None,
+                None,
+                True,
+                None,
+                warning_cb=warnings.append,
+            )
+
+        self.assertEqual(result.name, "Series")
+        self.assertTrue(any("author" in warning.lower() for warning in warnings))
+        self.assertTrue(any(
+            call.args[0].get("status") == "warning"
+            for call in emit.call_args_list
+        ))
+
+
+class MetadataEncodingTests(unittest.TestCase):
+    def test_series_metadata_is_written_as_utf8(self):
+        parser = type("Parser", (), {
+            "iter_chapter_list": lambda self, url: iter([
+                ChapterInfo(1, "One", "url-1"),
+            ]),
+            "get_image_headers": lambda self: {},
+        })()
+        config_values = {
+            "verify_integrity": False,
+            "max_concurrent_chapters": 1,
+            "overwrite": False,
+        }
+
+        with tempfile.TemporaryDirectory() as tmp, \
+             patch("strip.downloader.config.get", side_effect=lambda key, default=None: config_values.get(key, default)), \
+             patch("strip.downloader._download_cover"), \
+             patch("strip.downloader.download_chapter") as download_chapter_mock:
+            series_dir = Path(tmp) / "Series"
+            series_dir.mkdir()
+            _do_download(
+                parser,
+                "url",
+                SeriesInfo("Series", "Mintaka Kim,망령풍뎅이", "", "", "url"),
+                series_dir,
+                None,
+                None,
+                False,
+                None,
+            )
+
+            metadata = (series_dir / "metadata.json").read_text(encoding="utf-8")
+
+        self.assertIn("Mintaka Kim,망령풍뎅이", metadata)
+        download_chapter_mock.assert_called_once()
+
+
 class BusySeriesTests(unittest.TestCase):
     def test_json_download_raises_when_series_lock_is_busy(self):
         parser = type("Parser", (), {
@@ -110,3 +198,23 @@ class BusySeriesTests(unittest.TestCase):
             call.args[0].get("status") == "error"
             for call in emit.call_args_list
         ))
+
+
+class FailedDownloadRecordTests(unittest.TestCase):
+    def test_failed_download_links_are_saved_for_later_retry(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            downloader._record_failed_download(
+                "https://example.test/series",
+                [ChapterFailure(2, "timeout")],
+                "partial",
+                root=Path(tmp),
+            )
+
+            record_path = Path(tmp) / ".failed-downloads.json"
+            records = json.loads(record_path.read_text(encoding="utf-8"))
+
+        self.assertEqual(len(records), 1)
+        self.assertEqual(records[0]["url"], "https://example.test/series")
+        self.assertEqual(records[0]["outcome"], "partial")
+        self.assertEqual(records[0]["failures"][0]["chapter"], 2)
+        self.assertEqual(records[0]["failures"][0]["message"], "timeout")

@@ -83,9 +83,9 @@ def scan_library(download_dir: Optional[Path] = None) -> List[LocalSeries]:
             continue
 
         try:
-            with open(meta_file) as f:
+            with open(meta_file, encoding="utf-8") as f:
                 meta = json.load(f)
-        except (json.JSONDecodeError, OSError):
+        except (json.JSONDecodeError, UnicodeDecodeError, OSError):
             meta = {}
 
         cover = series_dir / "cover.jpg"
@@ -103,7 +103,7 @@ def scan_library(download_dir: Optional[Path] = None) -> List[LocalSeries]:
             ch_meta = {}
             if ch_meta_file.exists():
                 try:
-                    with open(ch_meta_file) as f:
+                    with open(ch_meta_file, encoding="utf-8") as f:
                         ch_meta = json.load(f)
                 except Exception:
                     pass

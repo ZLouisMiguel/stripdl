@@ -8,6 +8,7 @@
 
 import React, { useEffect, useRef, useState } from "react";
 import { useDownloadTray } from "../../context/DownloadTrayContext.jsx";
+import { getTrayChevronDirection } from "../../lib/trayControls.mjs";
 import JobRow from "./JobRow.jsx";
 import QueuedJobRow from "./QueuedJobRow.jsx";
 
@@ -64,6 +65,8 @@ export default function DownloadTray() {
     if (isOpen) toggleCollapse();
   }
 
+  const chevronDirection = getTrayChevronDirection(isCollapsed);
+
   return (
     <div
       className={`download-tray ${isOpen ? "is-open" : ""} ${isCollapsed ? "is-collapsed" : ""}`}
@@ -87,13 +90,14 @@ export default function DownloadTray() {
         <div className="tray-header-right">
           <button
             className="btn btn-ghost icon-btn tray-collapse-btn"
-            title="Collapse"
+            title={isCollapsed ? "Expand" : "Collapse"}
+            aria-label={isCollapsed ? "Expand downloads" : "Collapse downloads"}
             onClick={(e) => {
               e.stopPropagation();
               if (isOpen) toggleCollapse();
             }}
           >
-            {isCollapsed ? (
+            {chevronDirection === "up" ? (
               <svg
                 viewBox="0 0 24 24"
                 fill="none"
@@ -101,7 +105,7 @@ export default function DownloadTray() {
                 strokeWidth="2"
                 style={{ width: 14, height: 14 }}
               >
-                <polyline points="6 9 12 15 18 9" />
+                <polyline points="18 15 12 9 6 15" />
               </svg>
             ) : (
               <svg
@@ -111,7 +115,7 @@ export default function DownloadTray() {
                 strokeWidth="2"
                 style={{ width: 14, height: 14 }}
               >
-                <polyline points="18 15 12 9 6 15" />
+                <polyline points="6 9 12 15 18 9" />
               </svg>
             )}
           </button>

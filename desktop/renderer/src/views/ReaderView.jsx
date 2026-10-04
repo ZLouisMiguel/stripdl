@@ -5,7 +5,7 @@
 // next-chapter preload, resume-to-saved-page on open, and keyboard
 // shortcuts.
 
-import React, { useCallback, useEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useConfig } from "../hooks/useConfig.js";
 import { updateLastReadPosition } from "../lib/readingProgress.js";
 import { createProgressDebouncer } from "../lib/progressDebouncer.mjs";
@@ -15,7 +15,13 @@ import {
   getWindowSpacerHeights,
 } from "../lib/readerWindow.mjs";
 import { toFileUrl } from "../lib/fileUrl.js";
-import { getReaderZoomStyle } from "../lib/readerZoom.mjs";
+import {
+  applyZoomLock,
+  getAnchoredScrollTop,
+  getReaderZoomStyle,
+} from "../lib/readerZoom.mjs";
+import { getReaderContentState } from "../lib/readerState.mjs";
+import LoadingIndicator from "../components/LoadingIndicator.jsx";
 
 function PageImage({ src, index, eager, loaded, wrapperRef }) {
   const [imgLoaded, setImgLoaded] = useState(false);
@@ -58,6 +64,7 @@ export default function ReaderView({
 }) {
   const { config } = useConfig();
   const [pages, setPages] = useState([]);
+  const [loading, setLoading] = useState(Boolean(chapter));
   const [error, setError] = useState(null);
   const [visibleIndex, setVisibleIndex] = useState(0);
   const [showEndOverlay, setShowEndOverlay] = useState(false);
@@ -65,14 +72,11 @@ export default function ReaderView({
   const [startPage, setStartPage] = useState(0);
   const [pageHeights, setPageHeights] = useState([]);
   const [zoom, setZoom] = useState(1);
+  const [zoomLocked, setZoomLocked] = useState(false);
 
   const ZOOM_MIN = 0.5;
   const ZOOM_MAX = 3;
   const ZOOM_STEP = 0.25;
-
-  function zoomIn()  { setZoom((z) => Math.min(ZOOM_MAX, +(z + ZOOM_STEP).toFixed(2))); }
-  function zoomOut() { setZoom((z) => Math.max(ZOOM_MIN, +(z - ZOOM_STEP).toFixed(2))); }
-  function zoomReset() { setZoom(1); }
 
   const containerRef = useRef(null);
   const pageRefs = useRef([]);
@@ -80,6 +84,52 @@ export default function ReaderView({
   const intersectingPagesRef = useRef(new Map());
   const visibleIndexRef = useRef(visibleIndex);
   visibleIndexRef.current = visibleIndex;
+  const zoomRef = useRef(zoom);
+  zoomRef.current = zoom;
+  const zoomLockedRef = useRef(zoomLocked);
+  zoomLockedRef.current = zoomLocked;
+  const zoomAnchorRef = useRef(null);
+
+  function captureZoomAnchor() {
+    const container = containerRef.current;
+    const page = pageRefs.current[visibleIndexRef.current];
+    if (!container || !page) return;
+    zoomAnchorRef.current = {
+      pageIndex: visibleIndexRef.current,
+      top: page.getBoundingClientRect().top - container.getBoundingClientRect().top,
+    };
+  }
+
+  function setZoomLevel(nextZoom) {
+    if (zoomLockedRef.current) return;
+    const current = zoomRef.current;
+    const next = applyZoomLock(
+      current,
+      Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, +nextZoom.toFixed(3))),
+      zoomLockedRef.current,
+    );
+    if (next === current) return;
+    captureZoomAnchor();
+    zoomRef.current = next;
+    setZoom(next);
+  }
+
+  function zoomIn()  { setZoomLevel(zoomRef.current + ZOOM_STEP); }
+  function zoomOut() { setZoomLevel(zoomRef.current - ZOOM_STEP); }
+  function zoomReset() { setZoomLevel(1); }
+
+  useLayoutEffect(() => {
+    const anchor = zoomAnchorRef.current;
+    const container = containerRef.current;
+    const page = anchor && pageRefs.current[anchor.pageIndex];
+    if (!anchor || !container || !page) {
+      zoomAnchorRef.current = null;
+      return;
+    }
+    const afterTop = page.getBoundingClientRect().top - container.getBoundingClientRect().top;
+    container.scrollTop = getAnchoredScrollTop(container.scrollTop, anchor.top, afterTop);
+    zoomAnchorRef.current = null;
+  }, [zoom]);
   const preloadTriggeredRef = useRef(false);
   const progressDebouncerRef = useRef(null);
   if (!progressDebouncerRef.current) {
@@ -105,6 +155,8 @@ export default function ReaderView({
     let cancelled = false;
     if (!chapter) return;
 
+    setLoading(true);
+
     // Immediately scroll back to top when switching chapters so we never
     // start mid-page on a fresh chapter.
     if (containerRef.current) containerRef.current.scrollTop = 0;
@@ -124,13 +176,17 @@ export default function ReaderView({
       try {
         filePaths = await window.strip.chapter.pages(chapter.directory);
       } catch (e) {
-        if (!cancelled) setError(e.message || String(e));
+        if (!cancelled) {
+          setError(e.message || String(e));
+          setLoading(false);
+        }
         return;
       }
       if (cancelled) return;
 
       const urls = filePaths.map((p) => toFileUrl(p));
       setPages(urls);
+      setLoading(false);
 
       let sp = scrollToPage;
       if (!sp) {
@@ -300,10 +356,7 @@ export default function ReaderView({
       // deltaY < 0  → pinch-out (zoom in)   deltaY > 0 → pinch-in (zoom out)
       // Scale the delta so small trackpad movements feel natural.
       const delta = e.deltaY * -0.005;
-      setZoom((z) => {
-        const next = z + delta;
-        return Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, +next.toFixed(3)));
-      });
+      setZoomLevel(zoomRef.current + delta);
     }
 
     // Must be non-passive so we can call preventDefault()
@@ -376,6 +429,11 @@ export default function ReaderView({
   const idx = series.chapters.findIndex((c) => c.number === chapter.number);
   const hasPrev = idx > 0;
   const hasNext = idx !== -1 && idx < series.chapters.length - 1;
+  const contentState = getReaderContentState({
+    loading,
+    error,
+    pageCount: pages.length,
+  });
 
   return (
     <section id="view-reader" className="view reader-view active">
@@ -436,7 +494,7 @@ export default function ReaderView({
               id="zoom-out-btn"
               className="btn btn-ghost icon-btn reader-zoom-btn"
               title="Zoom out (−)"
-              disabled={zoom <= ZOOM_MIN}
+              disabled={zoomLocked || zoom <= ZOOM_MIN}
               onClick={zoomOut}
             >
               −
@@ -445,6 +503,7 @@ export default function ReaderView({
               id="zoom-reset-btn"
               className="btn btn-ghost reader-zoom-level"
               title="Reset zoom (0)"
+              disabled={zoomLocked}
               onClick={zoomReset}
             >
               {Math.round(zoom * 100)}%
@@ -453,10 +512,37 @@ export default function ReaderView({
               id="zoom-in-btn"
               className="btn btn-ghost icon-btn reader-zoom-btn"
               title="Zoom in (=)"
-              disabled={zoom >= ZOOM_MAX}
+              disabled={zoomLocked || zoom >= ZOOM_MAX}
               onClick={zoomIn}
             >
               +
+            </button>
+            <button
+              id="zoom-lock-btn"
+              className="btn btn-ghost icon-btn reader-zoom-btn"
+              title={zoomLocked ? "Unlock zoom" : "Lock zoom"}
+              aria-label={zoomLocked ? "Unlock zoom" : "Lock zoom"}
+              aria-pressed={zoomLocked}
+              onClick={() => setZoomLocked((locked) => !locked)}
+            >
+              <svg
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                aria-hidden="true"
+                style={{ width: 14, height: 14 }}
+              >
+                <rect x="5" y="10" width="14" height="10" rx="2" />
+                {zoomLocked ? (
+                  <path d="M8 10V7a4 4 0 0 1 8 0v3" />
+                ) : (
+                  <path d="M8 10V7a4 4 0 0 1 7.4-2.1" />
+                )}
+                <path d="M12 14v3" />
+              </svg>
             </button>
           </div>
         </div>
@@ -469,12 +555,15 @@ export default function ReaderView({
             ...getReaderZoomStyle(zoom),
           }}
         >
-          {error && (
+          {contentState === "loading" && (
+            <LoadingIndicator label="Loading chapter pages…" />
+          )}
+          {contentState === "error" && (
             <div className="reader-page-error">
               Could not load pages: {error}
             </div>
           )}
-          {!error && pages.length === 0 && (
+          {contentState === "empty" && (
             <div className="reader-page-error">
               No pages found in this chapter.
             </div>
